@@ -1,5 +1,5 @@
 /**
- * GasGuardian UserBot v4.0
+ * GasGuardian UserBot v4.1
  * 
  * Node 20+, tsx, Telethon (gramjs), Redis, Postgres/Prisma.
  * 
@@ -8,7 +8,13 @@
  * - Persistent per-user Bitly links for analytic funnels.
  * - Onchain gas alerts, Alpha feed, owner stats export, and more.
  * 
- * See config below for tunables. 
+ * See config below for tunables.
+ * 
+ * --- README ---
+ * 1. Create .env with TG_API_ID, TG_API_HASH, TG_SESSION, OWNER_CHAT_ID, BITLY_TOKEN, BLOCKNATIVE_KEY, CRYPTO_PANIC_KEY
+ * 2. Set up Postgres DB and Prisma schema (see models: internal_testers, interactionLog, userProfile).
+ * 3. Run: npx tsx gasguardian-userbot.ts
+ * 4. To export stats, as owner DM /export_stats to the bot.
  */
 
 import { TelegramClient } from "telegram";
@@ -18,7 +24,6 @@ import Redis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import axios from "axios";
 import { DateTime } from "luxon";
-import csvStringify from "csv-stringify/lib/sync";
 
 // --- CONFIG ---
 const config = {
@@ -186,10 +191,22 @@ async function fetchAlphaFeed(): Promise<string[]> {
   }
 }
 /** Export stats as CSV. */
+function arrayToCsv(rows: (string | number | Date)[][]): string {
+  return rows.map(row =>
+    row.map(field => {
+      if (typeof field === "string" && (field.includes(",") || field.includes('"') || field.includes("\n"))) {
+        return `"${field.replace(/"/g, '""')}"`;
+      }
+      return String(field ?? "");
+    }).join(",")
+  ).join("\n");
+}
 async function exportStats(): Promise<string> {
   const testers = await prisma[config.onboarding.testerTable].findMany();
   const clicks = await prisma.interactionLog.findMany({ where: { event: "click" } });
-  return csvStringify([["tgId", "email", "timestamp"], ...testers.map(t => [t.tgId, t.email, t.timestamp])]);
+  const header = [["tgId", "email", "timestamp"]];
+  const testerRows = testers.map((t:any) => [t.tgId, t.email, t.timestamp]);
+  return arrayToCsv([...header, ...testerRows]);
 }
 
 // --- CORE HANDLERS ---
@@ -212,7 +229,7 @@ async function sendDailyDigest() {
   if (now.hour !== config.onboarding.testerDigestHourUTC) return;
   const since = now.minus({ days: 1 }).toJSDate();
   const testers = await prisma[config.onboarding.testerTable].findMany({ where: { timestamp: { gte: since } } });
-  const digest = `Daily Digest: ${testers.length} new testers\n` + testers.map(t => `${t.tgId} | ${t.email}`).join("\n");
+  const digest = `Daily Digest: ${testers.length} new testers\n` + testers.map((t:any) => `${t.tgId} | ${t.email}`).join("\n");
   await client.sendMessage(config.telegram.ownerChatId, { message: digest });
 }
 /** Alpha feed and gas alert commands. */
@@ -279,6 +296,12 @@ async function main() {
     if (event.message?.peerId?.chatId && event.message?.fromId?.userId) {
       // TODO: Add admin/mod/bot check via Telegram API
       // For now, assume all users are valid
+    }
+
+    // Handle owner stats export
+    if (msg.startsWith(config.analytics.exportCommand)) {
+      await handleOwnerExport(userId);
+      return;
     }
 
     // Anti-spam: enforce reply gap
@@ -352,12 +375,3 @@ async function main() {
 }
 
 main().catch(console.error);
-
-/**
- * README
- * 
- * 1. Create .env with TG_API_ID, TG_API_HASH, TG_SESSION, OWNER_CHAT_ID, BITLY_TOKEN, BLOCKNATIVE_KEY, CRYPTO_PANIC_KEY
- * 2. Set up Postgres DB and Prisma schema (see models: internal_testers, interactionLog, userProfile).
- * 3. Run: npx tsx gasguardian-userbot.ts
- * 4. To export stats, as owner DM /export_stats to the bot.
- */
