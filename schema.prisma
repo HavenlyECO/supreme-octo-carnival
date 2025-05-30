@@ -1,0 +1,22 @@
+model internal_testers {
+  id        Int      @id @default(autoincrement())
+  tgId      BigInt   @unique
+  email     String
+  timestamp DateTime @default(now())
+}
+
+model interactionLog {
+  id        Int      @id @default(autoincrement())
+  messageId BigInt
+  userId    BigInt
+  reply     String
+  bitly     String?
+  event     String
+  meta      Json
+  timestamp DateTime @default(now())
+}
+
+model userProfile {
+  tgId     BigInt @id
+  address  String?
+}
