@@ -1,21 +1,41 @@
-// === LOAD ENVIRONMENT VARIABLES ASAP ===
-import 'dotenv/config'; // <-- This line ensures .env variables are loaded before anything else!
+/* ==========================================================
+   GasGuardian – Advanced Multi‑Chain Crypto Assistant
+   USERBOT (not a channel bot)
+   Version: 2.0.2 – 2025‑05‑31
+   ========================================================== */
 
-/**
- * GasGuardian - Advanced Multi-Chain Crypto Assistant & Beta Recruitment Userbot
- * 
- * Features:
- * - Real-time crypto data from 6+ specialized APIs
- * - GPT-4o powered message analysis and reply generation
- * - Smart beta-tester recruitment with referral tracking
- * - Auto-discovery of relevant crypto groups/channels
- * - A/B testing and analytics system for optimization
- * - Owner dashboard and comprehensive data reporting
- * 
- * Version: 2.0.1
- * Last updated: 2025-05-31
- */
+/* ---------- 1. LOAD & VALIDATE ENVIRONMENT --------------- */
+import * as path from "path";
+import { config as dotenvConfig } from "dotenv";
+dotenvConfig({ path: path.resolve(process.cwd(), ".env") });
 
+function getEnv(name: string, required: boolean = true): string {
+  const realKey = Object.keys(process.env).find(
+    (k) => k.trim().replace(/^\uFEFF/, "") === name
+  );
+  const value = realKey ? process.env[realKey] : undefined;
+  if (required && (!value || value.trim() === ""))
+    throw new Error(`[GasGuardian] Missing required env var → ${name}`);
+  return value ? value.trim() : "";
+}
+
+const env = {
+  TG_API_ID: parseInt(getEnv("TG_API_ID")),
+  TG_API_HASH: getEnv("TG_API_HASH"),
+  TG_SESSION: getEnv("TG_SESSION"),
+  OWNER_CHAT_ID: parseInt(getEnv("OWNER_CHAT_ID")),
+  OPENAI_API_KEY: getEnv("OPENAI_API_KEY"),
+  BITLY_TOKEN: getEnv("BITLY_TOKEN", false),
+  BLOCKNATIVE_KEY: getEnv("BLOCKNATIVE_KEY", false),
+  BITQUERY_KEY: getEnv("BITQUERY_KEY", false),
+  CRYPTO_PANIC_KEY: getEnv("CRYPTO_PANIC_KEY", false),
+  COINGLASS_KEY: getEnv("COINGLASS_KEY", false),
+  DAPPRADAR_KEY: getEnv("DAPPRADAR_KEY", false),
+  REDIS_URL: getEnv("REDIS_URL", false) || "redis://localhost:6379",
+  DATABASE_URL: getEnv("DATABASE_URL", false),
+};
+
+/* ---------- 2. DEPENDENCIES ------------------------------ */
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { Api } from "telegram";
@@ -29,56 +49,50 @@ import { DateTime } from "luxon";
 import * as crypto from "crypto";
 import schedule from "node-schedule";
 
-// ==========================================================
-// SETUP & CONFIGURATION
-// ==========================================================
-
-// Clients
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+/* ---------- 3. CLIENT INITIALISATION --------------------- */
+const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const redis = new Redis(env.REDIS_URL);
 const prisma = new PrismaClient();
 
-// Bot configuration
+/* ---------- 4. BOT CONFIG -------------------------------- */
 const config = {
   telegram: {
-    apiId: Number(process.env.TG_API_ID),
-    apiHash: process.env.TG_API_HASH as string,
-    session: process.env.TG_SESSION as string,
-    ownerChat: Number(process.env.OWNER_CHAT_ID),
+    apiId: env.TG_API_ID,
+    apiHash: env.TG_API_HASH,
+    session: env.TG_SESSION,
+    ownerChat: env.OWNER_CHAT_ID,
   },
   reply: {
     maxLength: 180,
-    minGroupGapSec: 900, // 15 min per group
-    minUserGapSec: 3600, // 1 hour per user in groups
-    dmRateLimitSec: 60,  // 1 min between DM replies
+    minGroupGapSec: 900,
+    minUserGapSec: 3600,
+    dmRateLimitSec: 60,
     rateBackoffMultiplier: 1.5,
     skipMsg: "SKIP",
-    testingLimit: 100,   // Max beta testers
-    languageProbability: 0.85, // Min confidence for English detection
-    sentimentThreshold: 0.6,   // Min negative sentiment score
-    ctaCooldownHours: 24,      // Hours between CTAs for same user
+    testingLimit: 100,
+    languageProbability: 0.85,
+    sentimentThreshold: 0.6,
+    ctaCooldownHours: 24,
   },
   recruitment: {
-    // A/B testing variants - system will rotate and track performance
     ctaVariants: [
       "DM me '/test' for VIP beta access (limited spots)!",
       "Want early access? DM '/test' to join our beta!",
       "Gas bothering you? DM '/test' for our solution's beta.",
-      "Join 100 exclusive testers: DM '/test' now."
+      "Join 100 exclusive testers: DM '/test' now.",
     ],
-    betaInstructions: "You're in! We'll whitelist your email for the GasGuardian Android beta. Please reply with your Gmail address.",
-    confirmationMessage: "Thanks! You're now on our VIP beta list. You'll receive an invite within 24h. Early access, priority support, and gas refunds await!",
+    betaInstructions:
+      "You're in! We'll whitelist your email for the GasGuardian Android beta. Please reply with your Gmail address.",
+    confirmationMessage:
+      "Thanks! You're now on our VIP beta list. You'll receive an invite within 24h. Early access, priority support, and gas refunds await!",
   },
   api: {
-    bitlyToken: process.env.BITLY_TOKEN,
-    blocknativeKey: process.env.BLOCKNATIVE_KEY,
-    bitqueryKey: process.env.BITQUERY_KEY,
-    cryptoPanicKey: process.env.CRYPTO_PANIC_KEY,
-    coinglassKey: process.env.COINGLASS_KEY,
-    dappRadarKey: process.env.DAPPRADAR_KEY,
+    bitlyToken: env.BITLY_TOKEN,
+    blocknativeKey: env.BLOCKNATIVE_KEY,
+    bitqueryKey: env.BITQUERY_KEY,
+    cryptoPanicKey: env.CRYPTO_PANIC_KEY,
+    coinglassKey: env.COINGLASS_KEY,
+    dappRadarKey: env.DAPPRADAR_KEY,
   },
   db: {
     testerTable: "beta_testers",
@@ -92,9 +106,9 @@ const config = {
   },
   discovery: {
     keywords: [
-      "gas", "eth", "ethereum", "defi", "nft", "crypto", "blockchain", 
-      "airdrop", "layer2", "degen", "token", "polygon", "arbitrum", 
-      "optimism", "base", "solana", "trading", "yield", "staking"
+      "gas", "eth", "ethereum", "defi", "nft", "crypto", "blockchain",
+      "airdrop", "layer2", "degen", "token", "polygon", "arbitrum",
+      "optimism", "base", "solana", "trading", "yield", "staking",
     ],
     intervalHours: 12,
     maxGroupsPerSearch: 15,
@@ -102,23 +116,22 @@ const config = {
     blacklistedWords: ["scam", "porn", "betting", "gambling"],
   },
   schedules: {
-    discoveryTime: "0 */12 * * *",  // Every 12 hours
-    analyticsTime: "0 0 * * *",     // Daily at midnight
-    leaderboardTime: "0 12 * * 1",  // Weekly on Monday at noon
-  }
+    discoveryTime: "0 */12 * * *",
+    analyticsTime: "0 0 * * *",
+    leaderboardTime: "0 12 * * 1",
+  },
 };
 
-// Chain configurations
+/* ---------- 5. CHAINS, ENUMS, TYPES ---------------------- */
 const chains = [
   { id: 1, name: "Ethereum", symbol: "ETH", emoji: "⛽" },
   { id: 137, name: "Polygon", symbol: "MATIC", emoji: "🟣" },
   { id: 56, name: "BNB Chain", symbol: "BNB", emoji: "🟨" },
   { id: 42161, name: "Arbitrum", symbol: "ETH", emoji: "🔵" },
   { id: 10, name: "Optimism", symbol: "ETH", emoji: "🔴" },
-  { id: 8453, name: "Base", symbol: "ETH", emoji: "🔷" }
+  { id: 8453, name: "Base", symbol: "ETH", emoji: "🔷" },
 ];
 
-// Message types for analysis
 enum MessageIntentType {
   GAS_COMPLAINT = "gas_complaint",
   TOKEN_INQUIRY = "token_inquiry",
@@ -128,7 +141,6 @@ enum MessageIntentType {
   OFF_TOPIC = "off_topic",
 }
 
-// Data source types
 enum DataSourceType {
   BLOCKNATIVE = "blocknative",
   BITQUERY = "bitquery",
@@ -139,16 +151,11 @@ enum DataSourceType {
   GPT = "gpt",
 }
 
-// Types
 interface AnalyzedMessage {
   isEnglish: boolean;
-  sentiment: number; // -1 to 1, negative to positive
+  sentiment: number;
   intent: MessageIntentType;
-  entities: {
-    chains: string[];
-    tokens: string[];
-    protocols: string[];
-  };
+  entities: { chains: string[]; tokens: string[]; protocols: string[] };
   keywords: string[];
 }
 
@@ -179,1326 +186,752 @@ interface DiscoveredGroup {
   isMonitored: boolean;
 }
 
-// ==========================================================
-// UTILS & HELPERS
-// ==========================================================
-
-const sleep = (ms: number): Promise<void> => new Promise(res => setTimeout(res, ms));
-
-// Rate limiting helpers
-async function canReplyInGroup(chatId: number): Promise<boolean> {
+/* ---------- 6. UTILITIES --------------------------------- */
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+async function canReplyInGroup(chatId: number) {
   const key = `ratelimit:group:${chatId}`;
   const last = await redis.get(key);
-  if (!last) return true;
-  
-  const elapsed = Date.now() - parseInt(last);
-  return elapsed > config.reply.minGroupGapSec * 1000;
+  return !last || Date.now() - parseInt(last) > config.reply.minGroupGapSec * 1e3;
 }
-
-async function canReplyToUser(userId: number): Promise<boolean> {
-  const key = `ratelimit:user:${userId}`;
+async function canReplyToUser(uid: number) {
+  const key = `ratelimit:user:${uid}`;
   const last = await redis.get(key);
-  if (!last) return true;
-  
-  const elapsed = Date.now() - parseInt(last);
-  return elapsed > config.reply.minUserGapSec * 1000;
+  return !last || Date.now() - parseInt(last) > config.reply.minUserGapSec * 1e3;
 }
-
-async function canReplyInDM(userId: number): Promise<boolean> {
-  const key = `ratelimit:dm:${userId}`;
+async function canReplyInDM(uid: number) {
+  const key = `ratelimit:dm:${uid}`;
   const last = await redis.get(key);
-  if (!last) return true;
-  
-  const elapsed = Date.now() - parseInt(last);
-  return elapsed > config.reply.dmRateLimitSec * 1000;
+  return !last || Date.now() - parseInt(last) > config.reply.dmRateLimitSec * 1e3;
 }
-
-async function markReplyInGroup(chatId: number): Promise<void> {
-  await redis.set(`ratelimit:group:${chatId}`, Date.now().toString());
+async function markReplyInGroup(cid: number) {
+  await redis.set(`ratelimit:group:${cid}`, Date.now().toString());
 }
-
-async function markReplyToUser(userId: number): Promise<void> {
-  await redis.set(`ratelimit:user:${userId}`, Date.now().toString());
+async function markReplyToUser(uid: number) {
+  await redis.set(`ratelimit:user:${uid}`, Date.now().toString());
 }
-
-async function markReplyInDM(userId: number): Promise<void> {
-  await redis.set(`ratelimit:dm:${userId}`, Date.now().toString());
+async function markReplyInDM(uid: number) {
+  await redis.set(`ratelimit:dm:${uid}`, Date.now().toString());
 }
-
-async function canShowCTA(userId: number): Promise<boolean> {
-  const key = `cta:cooldown:${userId}`;
+async function canShowCTA(uid: number) {
+  const key = `cta:cooldown:${uid}`;
   const last = await redis.get(key);
-  if (!last) return true;
-  
-  const elapsed = Date.now() - parseInt(last);
-  return elapsed > config.reply.ctaCooldownHours * 3600 * 1000;
+  return !last || Date.now() - parseInt(last) > config.reply.ctaCooldownHours * 3600 * 1e3;
 }
-
-async function markCTAShown(userId: number): Promise<void> {
-  await redis.set(`cta:cooldown:${userId}`, Date.now().toString());
+async function markCTAShown(uid: number) {
+  await redis.set(`cta:cooldown:${uid}`, Date.now().toString());
 }
-
-// Unique identifier generator for tracking
 function generateTrackingId(): string {
-  return crypto.randomBytes(4).toString('hex');
+  return crypto.randomBytes(4).toString("hex");
 }
 
-// ==========================================================
-// DISCOVERY FUNCTIONALITY
-// ==========================================================
-
-/**
- * Search and discover new Telegram groups/channels based on keywords
- */
-async function discoverGroups(client: TelegramClient): Promise<void> {
-  console.log(`[${new Date().toISOString()}] Starting group discovery...`);
-  let totalDiscovered = 0;
-
-  for (const keyword of config.discovery.keywords) {
+/* ---------- 7. DISCOVERY & OWNER COMMANDS ---------------- */
+async function discoverGroups(client: TelegramClient) {
+  console.log(`[${new Date().toISOString()}] Starting group discovery…`);
+  let total = 0;
+  for (const kw of config.discovery.keywords) {
     try {
-      console.log(`Searching for groups with keyword: ${keyword}`);
-      
-      // Use Telegram's search function to find public groups/channels
-      const result = await client.invoke(new Api.contacts.Search({
-        q: keyword,
-        limit: config.discovery.maxGroupsPerSearch,
-      }));
-      
-      // Process found chats (groups/channels)
+      const result = await client.invoke(
+        new Api.contacts.Search({ q: kw, limit: config.discovery.maxGroupsPerSearch })
+      );
       for (const chat of result.chats) {
         if (!("title" in chat)) continue;
-        
         const chatId = chat.id;
         const title = (chat as any).title as string;
         const username = (chat as any).username as string | undefined;
         const isChannel = !!(chat as any).broadcast;
-        const memberCount = (chat as any).participantsCount || undefined;
-        
-        // Skip if contains blacklisted words
-        if (config.discovery.blacklistedWords.some(word => 
-            title.toLowerCase().includes(word))) {
+        const memberCount = (chat as any).participantsCount ?? undefined;
+        if (
+          config.discovery.blacklistedWords.some((w) => title.toLowerCase().includes(w)) ||
+          (memberCount && memberCount < config.discovery.minGroupSize)
+        )
           continue;
-        }
-        
-        // Skip if too small
-        if (memberCount !== undefined && memberCount < config.discovery.minGroupSize) {
-          continue;
-        }
-        
-        // Store in database
-        try {
-          await prisma[config.db.discoveredGroupTable].upsert({
-            where: { id: chatId },
-            update: {
-              lastCheckedAt: new Date(),
-              title,
-              username,
-              memberCount,
-            },
-            create: {
-              id: chatId,
-              title,
-              username,
-              memberCount,
-              isChannel,
-              discoveredAt: new Date(),
-              lastCheckedAt: new Date(),
-              keyword,
-              isMonitored: false,
-            },
-          });
-          
-          // Log discovery
-          await prisma[config.db.discoveryLogTable].create({
-            data: {
-              groupId: chatId,
-              title,
-              keyword,
-              timestamp: new Date(),
-              memberCount,
-            },
-          });
-          
-          totalDiscovered++;
-        } catch (error) {
-          console.error(`Error storing discovered group ${chatId}:`, error);
-        }
+
+        await prisma[config.db.discoveredGroupTable].upsert({
+          where: { id: chatId },
+          update: { lastCheckedAt: new Date(), title, username, memberCount },
+          create: {
+            id: chatId,
+            title,
+            username,
+            memberCount,
+            isChannel,
+            discoveredAt: new Date(),
+            lastCheckedAt: new Date(),
+            keyword: kw,
+            isMonitored: false,
+          },
+        });
+        await prisma[config.db.discoveryLogTable].create({
+          data: { groupId: chatId, title, keyword: kw, timestamp: new Date(), memberCount },
+        });
+        total++;
       }
-      
-      // Don't hit rate limits
-      await sleep(2000);
-      
-    } catch (error) {
-      console.error(`Error discovering groups for keyword ${keyword}:`, error);
+      await sleep(2e3);
+    } catch (e) {
+      console.error(`Discovery error for '${kw}':`, e);
     }
   }
-  
-  console.log(`[${new Date().toISOString()}] Discovery complete. Found ${totalDiscovered} new or updated groups.`);
-  
-  // Notify owner
-  if (totalDiscovered > 0) {
-    await sendDiscoveryReport(client);
-  }
+  console.log(`[${new Date().toISOString()}] Discovery complete – ${total} groups`);
+  if (total) await sendDiscoveryReport(client);
 }
 
-/**
- * Send a report of newly discovered groups to the owner
- */
-async function sendDiscoveryReport(client: TelegramClient): Promise<void> {
-  // Get recently discovered groups
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  
+async function sendDiscoveryReport(client: TelegramClient) {
+  const yesterday = DateTime.utc().minus({ days: 1 }).toJSDate();
   const groups = await prisma[config.db.discoveredGroupTable].findMany({
     where: {
-      OR: [
-        { discoveredAt: { gte: yesterday } },
-        { lastCheckedAt: { gte: yesterday } }
-      ]
+      OR: [{ discoveredAt: { gte: yesterday } }, { lastCheckedAt: { gte: yesterday } }],
     },
-    orderBy: { memberCount: 'desc' },
+    orderBy: { memberCount: "desc" },
     take: 20,
   });
-  
-  if (groups.length === 0) return;
-  
-  // Build report message
-  let message = `🔍 **Group Discovery Report**\n\n`;
-  message += `Found ${groups.length} new or updated groups:\n\n`;
-  
-  for (const group of groups) {
-    const memberText = group.memberCount ? `(~${group.memberCount} members)` : '';
-    const username = group.username ? `@${group.username}` : 'private';
-    message += `• ${group.title} - ${username} ${memberText}\n`;
+  if (!groups.length) return;
+  let msg = "🔍 **Group Discovery Report**\n\n";
+  msg += `Found ${groups.length} new/updated groups:\n\n`;
+  for (const g of groups) {
+    const members = g.memberCount ? `(~${g.memberCount} members)` : "";
+    const uname = g.username ? `@${g.username}` : "private";
+    msg += `• ${g.title} – ${uname} ${members}\n`;
   }
-  
-  // Add stats
-  const totalGroups = await prisma[config.db.discoveredGroupTable].count();
-  message += `\nTotal tracked groups: ${totalGroups}\n`;
-  message += `\nUse /monitor <group_id> to start monitoring a group.`;
-  
-  // Send to owner
-  await client.sendMessage(config.telegram.ownerChat, { message });
+  const total = await prisma[config.db.discoveredGroupTable].count();
+  msg += `\nTotal tracked groups: ${total}\n`;
+  msg += "\nUse /monitor <group_id> to start monitoring.";
+  await client.sendMessage(config.telegram.ownerChat, { message: msg });
 }
 
-/**
- * Handle owner commands for group monitoring
- */
-async function handleOwnerCommands(client: TelegramClient, userId: number, text: string): Promise<boolean> {
-  // Only process commands from owner
-  if (userId !== config.telegram.ownerChat) return false;
-  
-  // Process commands
+async function handleOwnerCommands(
+  client: TelegramClient,
+  uid: number,
+  text: string
+): Promise<boolean> {
+  if (uid !== config.telegram.ownerChat) return false;
   if (text === "/discover_now") {
-    await client.sendMessage(userId, { message: "Starting manual group discovery..." });
+    await client.sendMessage(uid, { message: "Starting manual discovery…" });
     await discoverGroups(client);
     return true;
   }
-  
   if (text === "/stats") {
     const stats = await generateOwnerStats();
-    await client.sendMessage(userId, { message: stats });
+    await client.sendMessage(uid, { message: stats });
     return true;
   }
-  
   if (text.startsWith("/monitor ")) {
-    const groupId = parseInt(text.split(" ")[1]);
-    if (isNaN(groupId)) {
-      await client.sendMessage(userId, { message: "Invalid group ID" });
+    const gid = parseInt(text.split(" ")[1]);
+    if (isNaN(gid)) {
+      await client.sendMessage(uid, { message: "Invalid group ID" });
       return true;
     }
-    
-    // Mark group as monitored
     await prisma[config.db.discoveredGroupTable].update({
-      where: { id: groupId },
-      data: { isMonitored: true }
+      where: { id: gid },
+      data: { isMonitored: true },
     });
-    
-    await client.sendMessage(userId, { message: `Group ${groupId} is now being monitored.` });
+    await client.sendMessage(uid, { message: `Group ${gid} is now monitored.` });
     return true;
   }
-  
   if (text === "/leaderboard") {
-    const leaderboard = await generateReferralLeaderboard();
-    await client.sendMessage(userId, { message: leaderboard });
+    const board = await generateReferralLeaderboard();
+    await client.sendMessage(uid, { message: board });
     return true;
   }
-  
   return false;
 }
 
-/**
- * Generate stats for the owner
- */
+/* ---------- 8. ANALYTICS / LEADERBOARD ------------------- */
 async function generateOwnerStats(): Promise<string> {
-  // Get tester count
-  const testerCount = await prisma[config.db.testerTable].count();
-  
-  // Get interaction stats
+  const testers = await prisma[config.db.testerTable].count();
   const totalReplies = await prisma[config.db.interactionTable].count({
-    where: { eventType: "group_reply" }
+    where: { eventType: "group_reply" },
   });
-  
-  const totalClicks = await prisma[config.db.interactionTable].count({
-    where: { eventType: "click" }
+  const clicks = await prisma[config.db.interactionTable].count({
+    where: { eventType: "click" },
   });
-  
-  const totalOnboarding = await prisma[config.db.interactionTable].count({
-    where: { eventType: "onboarding" }
+  const onboard = await prisma[config.db.interactionTable].count({
+    where: { eventType: "onboarding" },
   });
-  
-  // Get data source stats
-  const dataSourceStats = await prisma[config.db.interactionTable].groupBy({
+  const sourceStats = await prisma[config.db.interactionTable].groupBy({
     by: ["source"],
     _count: { source: true },
-    where: { source: { not: null } }
+    where: { source: { not: null } },
   });
-  
-  // Get conversion rate
-  const conversionRate = totalReplies > 0 
-    ? ((totalOnboarding / totalReplies) * 100).toFixed(2) 
-    : "0.00";
-  
-  // Get CTR
-  const ctr = totalReplies > 0 
-    ? ((totalClicks / totalReplies) * 100).toFixed(2)
-    : "0.00";
-  
-  // Build stats message
-  let stats = `📊 **GasGuardian Stats**\n\n`;
-  stats += `Beta Testers: ${testerCount}/${config.reply.testingLimit}\n`;
-  stats += `Group Replies: ${totalReplies}\n`;
-  stats += `Link Clicks: ${totalClicks}\n`;
-  stats += `Onboarded Users: ${totalOnboarding}\n\n`;
-  stats += `CTR: ${ctr}%\n`;
-  stats += `Conversion Rate: ${conversionRate}%\n\n`;
-  stats += `**Data Sources:**\n`;
-  
-  for (const source of dataSourceStats) {
-    stats += `${source.source}: ${source._count.source}\n`;
-  }
-  
-  return stats;
+  const conversionRate = totalReplies ? ((onboard / totalReplies) * 100).toFixed(2) : "0.00";
+  const ctr = totalReplies ? ((clicks / totalReplies) * 100).toFixed(2) : "0.00";
+
+  let msg = "📊 **GasGuardian Stats**\n\n";
+  msg += `Beta Testers: ${testers}/${config.reply.testingLimit}\n`;
+  msg += `Group Replies: ${totalReplies}\n`;
+  msg += `Link Clicks: ${clicks}\n`;
+  msg += `Onboarded Users: ${onboard}\n\n`;
+  msg += `CTR: ${ctr}%\nConversion Rate: ${conversionRate}%\n\n`;
+  msg += "**Data Sources:**\n";
+  for (const s of sourceStats) msg += `${s.source}: ${s._count.source}\n`;
+  return msg;
 }
 
-/**
- * Generate referral leaderboard
- */
 async function generateReferralLeaderboard(): Promise<string> {
-  // Get top referrers
   const referrers = await prisma[config.db.referralTable].groupBy({
     by: ["referrerId"],
     _count: { referredId: true },
-    orderBy: {
-      _count: {
-        referredId: "desc"
-      }
-    },
-    take: 10
+    orderBy: { _count: { referredId: "desc" } },
+    take: 10,
   });
-  
-  // Build leaderboard message
-  let leaderboard = `🏆 **Beta Tester Leaderboard**\n\n`;
-  
-  if (referrers.length === 0) {
-    leaderboard += "No referrals yet.";
-    return leaderboard;
-  }
-  
+  let board = "🏆 **Beta Tester Leaderboard**\n\n";
+  if (!referrers.length) return board + "No referrals yet.";
   for (let i = 0; i < referrers.length; i++) {
-    const referrer = referrers[i];
+    const r = referrers[i];
     const tester = await prisma[config.db.testerTable].findUnique({
-      where: { tgUserId: referrer.referrerId }
+      where: { tgUserId: r.referrerId },
     });
-    
-    const userName = tester 
-      ? `User ${tester.tgUserId}`
-      : `Unknown User`;
-    
-    leaderboard += `${i + 1}. ${userName}: ${referrer._count.referredId} invites\n`;
+    const name = tester ? `User ${tester.tgUserId}` : "Unknown User";
+    board += `${i + 1}. ${name}: ${r._count.referredId} invites\n`;
   }
-  
-  return leaderboard;
+  return board;
 }
 
-// ==========================================================
-// A/B TESTING & OPTIMIZATION
-// ==========================================================
-
-/**
- * Get the best performing CTA variant or rotate variants
- */
-async function getCTAVariant(userId: number): Promise<string> {
-  // Get user's variant index based on user ID for consistent experience
-  const variantIndex = userId % config.recruitment.ctaVariants.length;
-  
-  // In production, you would analyze performance and return the best variant
-  // For now, we'll just rotate based on user ID
-  return config.recruitment.ctaVariants[variantIndex];
+/* ---------- 9. A/B TESTING HELPERS ----------------------- */
+async function getCTAVariant(uid: number) {
+  return config.recruitment.ctaVariants[uid % config.recruitment.ctaVariants.length];
 }
-
-/**
- * Log A/B test result
- */
-async function logABTest(userId: number, variantIndex: number, eventType: string): Promise<void> {
+async function logABTest(uid: number, idx: number, type: string) {
   await prisma[config.db.abTestTable].create({
-    data: {
-      userId,
-      variantIndex,
-      eventType,
-      timestamp: new Date()
-    }
+    data: { userId: uid, variantIndex: idx, eventType: type, timestamp: new Date() },
   });
 }
-
-/**
- * Calculate A/B test results and optimize
- */
-async function analyzeABTestResults(): Promise<void> {
-  const variants = config.recruitment.ctaVariants;
-  const results = [];
-  
-  for (let i = 0; i < variants.length; i++) {
-    // Count impressions
+async function analyzeABTestResults() {
+  const res = [];
+  for (let i = 0; i < config.recruitment.ctaVariants.length; i++) {
     const impressions = await prisma[config.db.abTestTable].count({
-      where: {
-        variantIndex: i,
-        eventType: "impression"
-      }
+      where: { variantIndex: i, eventType: "impression" },
     });
-    
-    // Count clicks
     const clicks = await prisma[config.db.abTestTable].count({
-      where: {
-        variantIndex: i,
-        eventType: "click"
-      }
+      where: { variantIndex: i, eventType: "click" },
     });
-    
-    // Count conversions
     const conversions = await prisma[config.db.abTestTable].count({
-      where: {
-        variantIndex: i,
-        eventType: "conversion"
-      }
+      where: { variantIndex: i, eventType: "conversion" },
     });
-    
-    const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-    const conversionRate = clicks > 0 ? (conversions / clicks) * 100 : 0;
-    
-    results.push({
-      variant: variants[i],
+    res.push({
+      variant: config.recruitment.ctaVariants[i],
       impressions,
       clicks,
       conversions,
-      ctr,
-      conversionRate
+      ctr: impressions ? (clicks / impressions) * 100 : 0,
+      conversionRate: clicks ? (conversions / clicks) * 100 : 0,
     });
   }
-  
-  // Log results
-  console.log("A/B Test Results:", results);
-  
-  // In a more advanced implementation, we would automatically optimize
-  // by updating the variants array based on performance
+  console.log("A/B Test Results:", res);
 }
 
-// ==========================================================
-// CORE FUNCTIONALITY
-// ==========================================================
-
-/**
- * Analyzes a message using GPT-4o to determine language, sentiment, and intent
- */
+/* ---------- 10. GPT ANALYSIS ----------------------------- */
 async function analyzeMessage(text: string): Promise<AnalyzedMessage | null> {
   try {
-    const response = await openai.chat.completions.create({
+    const rsp = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         {
-          role: "system", 
-          content: "Analyze this Telegram message for a crypto bot. Return a JSON object with: " +
-                  "isEnglish (boolean), sentiment (number from -1 to 1), " +
-                  "intent (one of: gas_complaint, token_inquiry, defi_question, nft_discussion, general_crypto, off_topic), " +
-                  "entities.chains (array of chain names mentioned), entities.tokens (array of token symbols mentioned), " +
-                  "entities.protocols (array of protocols mentioned), and keywords (array of important words)."
+          role: "system",
+          content:
+            "Analyze this Telegram message for a crypto bot. Return JSON with: " +
+            "isEnglish, sentiment (-1..1), intent (gas_complaint | token_inquiry | defi_question | nft_discussion | general_crypto | off_topic)," +
+            "entities.chains, entities.tokens, entities.protocols, keywords.",
         },
-        { role: "user", content: text }
+        { role: "user", content: text },
       ],
       response_format: { type: "json_object" },
       temperature: 0.2,
     });
-    
-    const result = JSON.parse(response.choices[0].message.content) as AnalyzedMessage;
-    return result;
-  } catch (error) {
-    console.error("Error analyzing message:", error);
+    return JSON.parse(rsp.choices[0].message.content!) as AnalyzedMessage;
+  } catch (e) {
+    console.error("Analyze error:", e);
     return null;
   }
 }
 
-/**
- * Generates a Bitly shortlink for tracking
- */
-async function generateBitlyLink(userId: number, trackingId: string): Promise<string> {
+/* ---------- 11. BITLY LINK GEN --------------------------- */
+async function generateBitlyLink(uid: number, tid: string) {
   try {
-    const longUrl = `https://gasguardian.app/invite?uid=${userId}&tid=${trackingId}`;
-    
-    const response = await axios.post(
+    const longUrl = `https://gasguardian.app/invite?uid=${uid}&tid=${tid}`;
+    const rsp = await axios.post(
       "https://api-ssl.bitly.com/v4/shorten",
-      { 
-        long_url: longUrl,
-        domain: "bit.ly"
-      },
+      { long_url: longUrl, domain: "bit.ly" },
       {
         headers: {
-          "Authorization": `Bearer ${config.api.bitlyToken}`,
-          "Content-Type": "application/json"
-        }
+          Authorization: `Bearer ${config.api.bitlyToken}`,
+          "Content-Type": "application/json",
+        },
       }
     );
-    
-    return response.data.link;
-  } catch (error) {
-    console.error("Error generating Bitly link:", error);
-    // Fallback to raw URL if Bitly fails
-    return `https://gasguardian.app/i/${trackingId}`;
+    return rsp.data.link;
+  } catch (e) {
+    console.error("Bitly error:", e);
+    return `https://gasguardian.app/i/${tid}`;
   }
 }
 
-/**
- * Log interaction for analytics
- */
+/* ---------- 12. INTERACTION LOGGER ----------------------- */
 async function logInteraction(data: {
-  userId: number,
-  groupId?: number,
-  messageId: number,
-  eventType: "group_reply" | "dm_reply" | "click" | "onboarding" | "impression",
-  trackingId: string,
-  source?: DataSourceType,
-  variantIndex?: number,
-  meta?: Record<string, any>
-}): Promise<void> {
+  userId: number;
+  groupId?: number;
+  messageId: number;
+  eventType: "group_reply" | "dm_reply" | "click" | "onboarding" | "impression";
+  trackingId: string;
+  source?: DataSourceType;
+  variantIndex?: number;
+  meta?: Record<string, any>;
+}) {
   await prisma[config.db.interactionTable].create({
-    data: {
-      userId: data.userId,
-      groupId: data.groupId,
-      messageId: data.messageId,
-      eventType: data.eventType,
-      trackingId: data.trackingId,
-      source: data.source,
-      variantIndex: data.variantIndex,
-      meta: data.meta || {},
-      timestamp: new Date()
-    }
+    data: { ...data, timestamp: new Date() },
   });
 }
 
-/**
- * Check if a user is eligible to join the beta test
- */
-async function canJoinBeta(): Promise<boolean> {
+/* ---------- 13. BETA TESTER REGISTRY --------------------- */
+async function canJoinBeta() {
   const count = await prisma[config.db.testerTable].count();
   return count < config.reply.testingLimit;
 }
-
-/**
- * Register a new beta tester
- */
-async function registerBetaTester(userId: number, email: string, referrerId?: number): Promise<void> {
+async function registerBetaTester(uid: number, email: string, referrerId?: number) {
   await prisma[config.db.testerTable].create({
-    data: {
-      tgUserId: userId,
-      email,
-      referrerId,
-      joinedAt: new Date()
-    }
+    data: { tgUserId: uid, email, referrerId, joinedAt: new Date() },
   });
-  
-  // If there's a referrer, update their stats
-  if (referrerId) {
+  if (referrerId)
     await prisma[config.db.referralTable].create({
-      data: {
-        referrerId,
-        referredId: userId,
-        timestamp: new Date()
-      }
+      data: { referrerId, referredId: uid, timestamp: new Date() },
     });
-  }
 }
 
-// ==========================================================
-// DATA SOURCES
-// ==========================================================
-
-/**
- * Fetch gas prices from Blocknative
- */
+/* ---------- 14. DATA FETCHERS (Blocknative, Bitquery, ... ) */
 async function fetchGasPrices(chainId: number): Promise<number | null> {
   try {
-    const response = await axios.get(
+    const rsp = await axios.get(
       `https://api.blocknative.com/gasprices/blockprices?chainid=${chainId}`,
-      {
-        headers: {
-          Authorization: config.api.blocknativeKey
-        }
-      }
+      { headers: { Authorization: config.api.blocknativeKey } }
     );
-    
-    return response.data.blockPrices[0]?.estimatedPrices[0]?.price || null;
-  } catch (error) {
-    console.error(`Error fetching gas price for chain ${chainId}:`, error);
+    return rsp.data.blockPrices[0]?.estimatedPrices[0]?.price ?? null;
+  } catch (e) {
+    console.error(`Gas fetch error ${chainId}:`, e);
     return null;
   }
 }
-
-/**
- * Fetch mempool data from Bitquery
- */
 async function fetchMempoolData(chainId: number): Promise<DataInsight | null> {
   try {
-    // Cache key for reducing API calls
-    const cacheKey = `mempool:${chainId}`;
-    const cached = await redis.get(cacheKey);
-    
-    if (cached) {
-      return JSON.parse(cached) as DataInsight;
-    }
-    
-    // Simplified for brevity - in production would use GraphQL
-    const response = await axios.post(
+    const key = `mempool:${chainId}`;
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+    const rsp = await axios.post(
       "https://graphql.bitquery.io",
       {
         query: `
-          query {
-            ethereum(network: ${chainId === 1 ? "ethereum" : chainId === 56 ? "bsc" : "arbitrum"}) {
-              transactions(options: {limit: 5, desc: "value"}) {
-                value
-                to {
-                  address
-                }
-                from {
-                  address
-                }
-              }
+        query {
+          ethereum(network: ${
+            chainId === 1 ? "ethereum" : chainId === 56 ? "bsc" : "arbitrum"
+          }) {
+            transactions(options: {limit: 5, desc: "value"}) {
+              value
+              to { address }
+              from { address }
             }
           }
-        `
+        }`,
       },
-      {
-        headers: {
-          "X-API-KEY": config.api.bitqueryKey
-        }
-      }
+      { headers: { "X-API-KEY": config.api.bitqueryKey } }
     );
-    
-    const txs = response.data.data.ethereum.transactions;
-    if (txs && txs.length > 0) {
-      const chain = chains.find(c => c.id === chainId);
-      const value = parseFloat(txs[0].value) / 1e18;
-      
-      const insight = {
-        text: `${chain?.emoji || "🔄"} Whale alert: ${value.toFixed(1)} ${chain?.symbol || "ETH"} moving on ${chain?.name || "chain"}!`,
-        source: DataSourceType.BITQUERY,
-        relevanceScore: 0.85,
-        timestamp: new Date()
-      };
-      
-      // Cache for 5 minutes
-      await redis.set(cacheKey, JSON.stringify(insight), "EX", 300);
-      
-      return insight;
-    }
-    return null;
-  } catch (error) {
-    console.error(`Error fetching mempool data for chain ${chainId}:`, error);
+    const txs = rsp.data.data.ethereum.transactions;
+    if (!txs?.length) return null;
+    const chain = chains.find((c) => c.id === chainId)!;
+    const value = parseFloat(txs[0].value) / 1e18;
+    const insight = {
+      text: `${chain.emoji} Whale alert: ${value.toFixed(1)} ${chain.symbol} moving on ${chain.name}!`,
+      source: DataSourceType.BITQUERY,
+      relevanceScore: 0.85,
+      timestamp: new Date(),
+    };
+    await redis.set(key, JSON.stringify(insight), "EX", 300);
+    return insight;
+  } catch (e) {
+    console.error("Mempool error:", e);
     return null;
   }
 }
-
-/**
- * Fetch trending tokens from CoinGecko
- */
 async function fetchTrendingTokens(): Promise<DataInsight | null> {
   try {
-    // Cache key
-    const cacheKey = "trending_tokens";
-    const cached = await redis.get(cacheKey);
-    
-    if (cached) {
-      return JSON.parse(cached) as DataInsight;
-    }
-    
-    const response = await axios.get("https://api.coingecko.com/api/v3/search/trending");
-    
-    if (response.data && response.data.coins && response.data.coins.length > 0) {
-      const topCoins = response.data.coins.slice(0, 3)
-        .map((coin: any) => coin.item.symbol.toUpperCase())
-        .join(", ");
-      
-      const insight = {
-        text: `📈 Trending now: ${topCoins}`,
-        source: DataSourceType.COINGECKO,
-        relevanceScore: 0.8,
-        timestamp: new Date()
-      };
-      
-      // Cache for 15 minutes
-      await redis.set(cacheKey, JSON.stringify(insight), "EX", 900);
-      
-      return insight;
-    }
-    return null;
-  } catch (error) {
-    console.error("Error fetching trending tokens:", error);
-    // Try to return cached data even if it's expired
-    try {
-      const cached = await redis.get("trending_tokens");
-      if (cached) {
-        return JSON.parse(cached) as DataInsight;
-      }
-    } catch {}
+    const key = "trending_tokens";
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+    const rsp = await axios.get("https://api.coingecko.com/api/v3/search/trending");
+    const top = rsp.data.coins?.slice(0, 3).map((c: any) => c.item.symbol.toUpperCase()).join(", ");
+    if (!top) return null;
+    const insight = {
+      text: `📈 Trending now: ${top}`,
+      source: DataSourceType.COINGECKO,
+      relevanceScore: 0.8,
+      timestamp: new Date(),
+    };
+    await redis.set(key, JSON.stringify(insight), "EX", 900);
+    return insight;
+  } catch (e) {
+    console.error("Trending token error:", e);
     return null;
   }
 }
-
-/**
- * Fetch crypto news from CryptoPanic
- */
 async function fetchCryptoNews(): Promise<DataInsight | null> {
   try {
-    // Cache key
-    const cacheKey = "crypto_news";
-    const cached = await redis.get(cacheKey);
-    
-    if (cached) {
-      return JSON.parse(cached) as DataInsight;
-    }
-    
-    const response = await axios.get(
+    const key = "crypto_news";
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+    const rsp = await axios.get(
       `https://cryptopanic.com/api/v1/posts/?auth_token=${config.api.cryptoPanicKey}&kind=news`
     );
-    
-    if (response.data && response.data.results && response.data.results.length > 0) {
-      const latestNews = response.data.results[0];
-      
-      const insight = {
-        text: `📰 Breaking: ${latestNews.title.substring(0, 80)}...`,
-        source: DataSourceType.CRYPTOPANIC,
-        relevanceScore: 0.7,
-        timestamp: new Date()
-      };
-      
-      // Cache for 20 minutes
-      await redis.set(cacheKey, JSON.stringify(insight), "EX", 1200);
-      
-      return insight;
-    }
-    return null;
-  } catch (error) {
-    console.error("Error fetching crypto news:", error);
-    // Try to return cached data even if it's expired
-    try {
-      const cached = await redis.get("crypto_news");
-      if (cached) {
-        return JSON.parse(cached) as DataInsight;
-      }
-    } catch {}
+    const news = rsp.data.results?.[0];
+    if (!news) return null;
+    const insight = {
+      text: `📰 Breaking: ${news.title.slice(0, 80)}...`,
+      source: DataSourceType.CRYPTOPANIC,
+      relevanceScore: 0.7,
+      timestamp: new Date(),
+    };
+    await redis.set(key, JSON.stringify(insight), "EX", 1200);
+    return insight;
+  } catch (e) {
+    console.error("News error:", e);
     return null;
   }
 }
-
-/**
- * Fetch funding rates from CoinGlass
- */
 async function fetchFundingRates(): Promise<DataInsight | null> {
   try {
-    // Cache key
-    const cacheKey = "funding_rates";
-    const cached = await redis.get(cacheKey);
-    
-    if (cached) {
-      return JSON.parse(cached) as DataInsight;
-    }
-    
-    const response = await axios.get(
+    const key = "funding_rates";
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+    const rsp = await axios.get(
       "https://open-api.coinglass.com/api/pro/v1/futures/funding_rates_chart",
       {
-        headers: {
-          "coinglassSecret": config.api.coinglassKey
-        },
-        params: {
-          symbol: "BTC",
-          time_type: "h4"
-        }
+        headers: { coinglassSecret: config.api.coinglassKey },
+        params: { symbol: "BTC", time_type: "h4" },
       }
     );
-    
-    if (response.data && response.data.data) {
-      const rates = response.data.data;
-      const binanceRate = rates.find((r: any) => r.exchange === "Binance");
-      
-      if (binanceRate && binanceRate.uMarginList && binanceRate.uMarginList.length > 0) {
-        const rate = binanceRate.uMarginList[binanceRate.uMarginList.length - 1];
-        const direction = rate > 0 ? "positive" : "negative";
-        
-        const insight = {
-          text: `💹 BTC funding rate ${direction} at ${Math.abs(rate).toFixed(4)}% on Binance`,
-          source: DataSourceType.COINGLASS,
-          relevanceScore: 0.75,
-          timestamp: new Date()
-        };
-        
-        // Cache for 30 minutes
-        await redis.set(cacheKey, JSON.stringify(insight), "EX", 1800);
-        
-        return insight;
-      }
-    }
-    return null;
-  } catch (error) {
-    console.error("Error fetching funding rates:", error);
-    // Try to return cached data even if it's expired
-    try {
-      const cached = await redis.get("funding_rates");
-      if (cached) {
-        return JSON.parse(cached) as DataInsight;
-      }
-    } catch {}
+    const binanceRate = rsp.data.data?.find((r: any) => r.exchange === "Binance");
+    const rate = binanceRate?.uMarginList?.slice(-1)[0];
+    if (rate == null) return null;
+    const dir = rate > 0 ? "positive" : "negative";
+    const insight = {
+      text: `💹 BTC funding rate ${dir} at ${Math.abs(rate).toFixed(4)}% on Binance`,
+      source: DataSourceType.COINGLASS,
+      relevanceScore: 0.75,
+      timestamp: new Date(),
+    };
+    await redis.set(key, JSON.stringify(insight), "EX", 1800);
+    return insight;
+  } catch (e) {
+    console.error("Funding error:", e);
     return null;
   }
 }
-
-/**
- * Fetch trending dApps from DappRadar
- */
 async function fetchTrendingDapps(): Promise<DataInsight | null> {
   try {
-    // Cache key
-    const cacheKey = "trending_dapps";
-    const cached = await redis.get(cacheKey);
-    
-    if (cached) {
-      return JSON.parse(cached) as DataInsight;
-    }
-    
-    const response = await axios.get(
-      "https://api.dappradar.com/4tsxo4vuhotaojtl/dapps",
-      {
-        params: {
-          sort: "users-desc",
-          page: 1,
-          resultsPerPage: 5
-        },
-        headers: {
-          "X-API-KEY": config.api.dappRadarKey
-        }
-      }
-    );
-    
-    if (response.data && response.data.results && response.data.results.length > 0) {
-      const topDapp = response.data.results[0];
-      
-      const insight = {
-        text: `🔥 ${topDapp.name} is the hottest dApp with ${topDapp.metrics.users_24h.toLocaleString()} users!`,
-        source: DataSourceType.DAPPRADAR,
-        relevanceScore: 0.7,
-        timestamp: new Date()
-      };
-      
-      // Cache for 1 hour
-      await redis.set(cacheKey, JSON.stringify(insight), "EX", 3600);
-      
-      return insight;
-    }
-    return null;
-  } catch (error) {
-    console.error("Error fetching trending dApps:", error);
-    // Try to return cached data even if it's expired
-    try {
-      const cached = await redis.get("trending_dapps");
-      if (cached) {
-        return JSON.parse(cached) as DataInsight;
-      }
-    } catch {}
+    const key = "trending_dapps";
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+    const rsp = await axios.get("https://api.dappradar.com/4tsxo4vuhotaojtl/dapps", {
+      params: { sort: "users-desc", page: 1, resultsPerPage: 5 },
+      headers: { "X-API-KEY": config.api.dappRadarKey },
+    });
+    const dapp = rsp.data.results?.[0];
+    if (!dapp) return null;
+    const insight = {
+      text: `🔥 ${dapp.name} is the hottest dApp with ${dapp.metrics.users_24h.toLocaleString()} users!`,
+      source: DataSourceType.DAPPRADAR,
+      relevanceScore: 0.7,
+      timestamp: new Date(),
+    };
+    await redis.set(key, JSON.stringify(insight), "EX", 3600);
+    return insight;
+  } catch (e) {
+    console.error("Dapp error:", e);
     return null;
   }
 }
 
-/**
- * Fetch insights based on analyzed message
- */
+/* ---------- 15. INSIGHT COLLECTOR ------------------------ */
 async function getRelevantInsights(analysis: AnalyzedMessage): Promise<DataInsight[]> {
   const insights: DataInsight[] = [];
-  
-  // Get chain-specific data if chains are mentioned
-  if (analysis.entities.chains.length > 0) {
+  if (analysis.entities.chains.length) {
     const chainName = analysis.entities.chains[0].toLowerCase();
-    const chain = chains.find(c => c.name.toLowerCase() === chainName);
-    
+    const chain = chains.find((c) => c.name.toLowerCase() === chainName);
     if (chain) {
-      // If it's a gas complaint, get gas prices
       if (analysis.intent === MessageIntentType.GAS_COMPLAINT) {
         const gas = await fetchGasPrices(chain.id);
-        if (gas !== null) {
+        if (gas !== null)
           insights.push({
-            text: `${chain.emoji} ${chain.name} gas: ${gas} gwei`,
+            text: `${chain.emoji} ${chain.name} gas: ${gas} gwei`,
             source: DataSourceType.BLOCKNATIVE,
             relevanceScore: 0.9,
-            timestamp: new Date()
+            timestamp: new Date(),
           });
-        }
       }
-      
-      // Get mempool data for the chain
-      const mempoolData = await fetchMempoolData(chain.id);
-      if (mempoolData) {
-        insights.push(mempoolData);
-      }
+      const mem = await fetchMempoolData(chain.id);
+      if (mem) insights.push(mem);
     }
   }
-  
-  // Get token data if tokens are mentioned
-  if (analysis.entities.tokens.length > 0) {
-    const trendingTokens = await fetchTrendingTokens();
-    if (trendingTokens) {
-      insights.push(trendingTokens);
-    }
+  if (analysis.entities.tokens.length) {
+    const trend = await fetchTrendingTokens();
+    if (trend) insights.push(trend);
   }
-  
-  // Get news if relevant
   if (analysis.intent === MessageIntentType.GENERAL_CRYPTO) {
     const news = await fetchCryptoNews();
-    if (news) {
-      insights.push(news);
-    }
+    if (news) insights.push(news);
   }
-  
-  // Get funding rates for trading discussions
-  if (analysis.intent === MessageIntentType.TOKEN_INQUIRY || analysis.keywords.includes("trading")) {
-    const fundingRates = await fetchFundingRates();
-    if (fundingRates) {
-      insights.push(fundingRates);
-    }
+  if (
+    analysis.intent === MessageIntentType.TOKEN_INQUIRY ||
+    analysis.keywords.includes("trading")
+  ) {
+    const fr = await fetchFundingRates();
+    if (fr) insights.push(fr);
   }
-  
-  // Get dApp data for DeFi questions
-  if (analysis.intent === MessageIntentType.DEFI_QUESTION || analysis.intent === MessageIntentType.NFT_DISCUSSION) {
-    const dapps = await fetchTrendingDapps();
-    if (dapps) {
-      insights.push(dapps);
-    }
+  if (
+    analysis.intent === MessageIntentType.DEFI_QUESTION ||
+    analysis.intent === MessageIntentType.NFT_DISCUSSION
+  ) {
+    const dapp = await fetchTrendingDapps();
+    if (dapp) insights.push(dapp);
   }
-  
-  // Sort by relevance
   return insights.sort((a, b) => b.relevanceScore - a.relevanceScore);
 }
 
-/**
- * Generate a reply using GPT-4o and the best insight
- */
-async function generateReply(analysis: AnalyzedMessage, insight: DataInsight): Promise<string> {
+/* ---------- 16. GPT REPLY GENERATOR ---------------------- */
+async function generateReply(a: AnalyzedMessage, insight: DataInsight) {
   try {
-    const response = await openai.chat.completions.create({
+    const rsp = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         {
-          role: "system", 
-          content: "You are GasGuardian, a helpful crypto assistant. Create a short, engaging reply (max 100 chars) " +
-                  "using this crypto insight. Be concise, specific, and actionable. No emojis or links."
+          role: "system",
+          content:
+            "You are GasGuardian, a helpful crypto assistant. Create a short, engaging reply " +
+            "(≤100 chars) using this crypto insight. Be concise, specific, actionable. No emojis/links.",
         },
-        { role: "user", content: `Insight: ${insight.text}. User sentiment: ${analysis.sentiment}` }
+        { role: "user", content: `Insight: ${insight.text}. Sentiment: ${a.sentiment}` },
       ],
       max_tokens: 100,
       temperature: 0.7,
     });
-    
-    let reply = response.choices[0].message.content?.trim() || insight.text;
-    
-    // Ensure reply isn't too long
-    if (reply.length > 100) {
-      reply = reply.substring(0, 97) + "...";
-    }
-    
+    let reply = rsp.choices[0].message.content?.trim() || insight.text;
+    if (reply.length > 100) reply = reply.slice(0, 97) + "...";
     return reply;
-  } catch (error) {
-    console.error("Error generating reply:", error);
-    return insight.text; // Fallback to raw insight
+  } catch (e) {
+    console.error("Reply error:", e);
+    return insight.text;
   }
 }
 
-/**
- * Format the final reply with optional CTA
- */
+/* ---------- 17. FINAL REPLY FORMATTER -------------------- */
 async function formatFinalReply(
-  userId: number, 
-  reply: string, 
+  uid: number,
+  reply: string,
   includeCta: boolean
-): Promise<{ text: string, trackingId: string, bitlyUrl?: string, variantIndex?: number }> {
-  const trackingId = generateTrackingId();
-  let finalReply = reply;
-  let bitlyUrl: string | undefined;
-  let variantIndex: number | undefined;
-  
+): Promise<{ text: string; trackingId: string; bitlyUrl?: string; variantIndex?: number }> {
+  const tid = generateTrackingId();
+  let final = reply;
+  let bitly: string | undefined;
+  let idx: number | undefined;
+
   if (includeCta) {
-    // Get the right CTA variant for this user (A/B testing)
-    variantIndex = userId % config.recruitment.ctaVariants.length;
-    const cta = config.recruitment.ctaVariants[variantIndex];
-    
-    bitlyUrl = await generateBitlyLink(userId, trackingId);
-    finalReply = `${reply}\n\n${cta} ${bitlyUrl}`;
+    idx = uid % config.recruitment.ctaVariants.length;
+    const cta = config.recruitment.ctaVariants[idx];
+    bitly = await generateBitlyLink(uid, tid);
+    final = `${reply}\n\n${cta} ${bitly}`;
   }
-  
-  // Ensure we don't exceed max length
-  if (finalReply.length > config.reply.maxLength) {
-    finalReply = finalReply.substring(0, config.reply.maxLength - 3) + "...";
-  }
-  
-  return { 
-    text: finalReply, 
-    trackingId,
-    bitlyUrl,
-    variantIndex
-  };
+  if (final.length > config.reply.maxLength) final = final.slice(0, config.reply.maxLength - 3) + "...";
+  return { text: final, trackingId: tid, bitlyUrl: bitly, variantIndex: idx };
 }
 
-// ==========================================================
-// MESSAGE HANDLERS
-// ==========================================================
-
-/**
- * Handle messages in groups
- */
-async function handleGroupMessage(event: NewMessageEvent): Promise<void> {
-  const message = event.message;
-  const text = message.message;
-  const chatId = Number(message.peerId.chatId || message.peerId.channelId);
-  const fromId = Number(message.fromId?.userId);
-  
+/* ---------- 18. GROUP MESSAGE HANDLER -------------------- */
+async function handleGroupMessage(event: NewMessageEvent) {
+  const m = event.message;
+  const text = m.message;
+  const chatId = Number(m.peerId.chatId || m.peerId.channelId);
+  const fromId = Number(m.fromId?.userId);
   if (!text || !chatId || !fromId) return;
-
-  // Don't process messages from bots or self
-  if (event.message.fromId?.className === "PeerUser" && event.message.fromId?.userId === "bot") {
+  if (event.message.fromId?.className === "PeerUser" && event.message.fromId?.userId === "bot")
     return;
-  }
-  
-  // Check rate limits
   if (!(await canReplyInGroup(chatId))) return;
   if (!(await canReplyToUser(fromId))) return;
-  
-  // Analyze the message
+
   const analysis = await analyzeMessage(text);
-  
-  // Skip if not English, positive sentiment, or off-topic
-  if (!analysis || 
-      !analysis.isEnglish || 
-      analysis.sentiment > -0.2 || 
-      analysis.intent === MessageIntentType.OFF_TOPIC) {
+  if (
+    !analysis ||
+    !analysis.isEnglish ||
+    analysis.sentiment > -0.2 ||
+    analysis.intent === MessageIntentType.OFF_TOPIC
+  )
     return;
-  }
-  
-  // Get insights based on message analysis
+
   const insights = await getRelevantInsights(analysis);
-  
-  // Skip if no relevant insights
-  if (insights.length === 0) {
-    return;
-  }
-  
-  // Use best insight
-  const bestInsight = insights[0];
-  
-  // Generate reply based on insight
-  const reply = await generateReply(analysis, bestInsight);
-  
-  // Determine if we should show CTA
-  const showCta = 
-    analysis.sentiment < -0.5 && // Very negative sentiment
-    await canShowCTA(fromId) &&   // Not shown recently
-    await canJoinBeta();          // Beta slots available
-  
-  // Format final reply
-  const finalReply = await formatFinalReply(fromId, reply, showCta);
-  
-  // Send the message
-  await client.sendMessage(chatId, { 
-    message: finalReply.text,
-    replyTo: message.id
-  });
-  
-  // Log interaction
+  if (!insights.length) return;
+  const best = insights[0];
+  const reply = await generateReply(analysis, best);
+  const showCta = analysis.sentiment < -0.5 && (await canShowCTA(fromId)) && (await canJoinBeta());
+  const final = await formatFinalReply(fromId, reply, showCta);
+
+  await client.sendMessage(chatId, { message: final.text, replyTo: m.id });
   await logInteraction({
     userId: fromId,
     groupId: chatId,
-    messageId: Number(message.id),
+    messageId: Number(m.id),
     eventType: "group_reply",
-    trackingId: finalReply.trackingId,
-    source: bestInsight.source,
-    variantIndex: finalReply.variantIndex,
-    meta: {
-      hasCta: showCta,
-      sentiment: analysis.sentiment,
-      intent: analysis.intent
-    }
+    trackingId: final.trackingId,
+    source: best.source,
+    variantIndex: final.variantIndex,
+    meta: { hasCta: showCta, sentiment: analysis.sentiment, intent: analysis.intent },
   });
-  
-  // If showing CTA, log the impression for A/B testing
-  if (showCta && finalReply.variantIndex !== undefined) {
-    await logABTest(fromId, finalReply.variantIndex, "impression");
-  }
-  
-  // Mark rate limits
+  if (showCta && final.variantIndex !== undefined)
+    await logABTest(fromId, final.variantIndex, "impression");
   await markReplyInGroup(chatId);
   await markReplyToUser(fromId);
-  
-  // If we showed a CTA, mark it
-  if (showCta) {
-    await markCTAShown(fromId);
-  }
+  if (showCta) await markCTAShown(fromId);
 }
 
-/**
- * Handle direct messages
- */
-async function handleDirectMessage(event: NewMessageEvent): Promise<void> {
-  const message = event.message;
-  const text = message.message;
-  const userId = Number(message.peerId.userId);
-  
-  if (!text || !userId) return;
-  
-  // Process owner commands first
-  if (await handleOwnerCommands(client, userId, text.trim())) {
-    return;
-  }
-  
-  // Rate limit DMs
-  if (!(await canReplyInDM(userId))) return;
-  
-  // User is requesting to join the beta test
+/* ---------- 19. DIRECT MESSAGE HANDLER ------------------- */
+async function handleDirectMessage(event: NewMessageEvent) {
+  const m = event.message;
+  const text = m.message;
+  const uid = Number(m.peerId.userId);
+  if (!text || !uid) return;
+
+  if (await handleOwnerCommands(client, uid, text.trim())) return;
+  if (!(await canReplyInDM(uid))) return;
+
   if (text.trim() === "/test" || text.toLowerCase().includes("join beta")) {
-    // Check if beta is full
-    if (await canJoinBeta()) {
-      await client.sendMessage(userId, { 
-        message: config.recruitment.betaInstructions
+    if (await canJoinBeta())
+      await client.sendMessage(uid, { message: config.recruitment.betaInstructions });
+    else
+      await client.sendMessage(uid, {
+        message: "Sorry, our beta test is full. We'll notify you when spots open!",
       });
-    } else {
-      await client.sendMessage(userId, { 
-        message: "Sorry, our beta test is currently at capacity. We'll notify you when spots open up!"
-      });
-    }
-    
-    // Log the onboarding request
     await logInteraction({
-      userId,
-      messageId: Number(message.id),
+      userId: uid,
+      messageId: Number(m.id),
       eventType: "onboarding",
       trackingId: generateTrackingId(),
-      meta: { step: "request" }
+      meta: { step: "request" },
     });
-    
-    await markReplyInDM(userId);
+    await markReplyInDM(uid);
     return;
   }
-  
-  // User is submitting their email for the beta
+
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (emailRegex.test(text.trim())) {
-    // Get referrer from tracking
-    const referrerKey = `referrer:${userId}`;
-    const referrerId = await redis.get(referrerKey);
-    
-    // Register the user
+    const referrerId = await redis.get(`referrer:${uid}`);
     await registerBetaTester(
-      userId,
+      uid,
       text.trim(),
       referrerId ? parseInt(referrerId) : undefined
     );
-    
-    // Confirm registration
-    await client.sendMessage(userId, { 
-      message: config.recruitment.confirmationMessage
-    });
-    
-    // Log onboarding completion
+    await client.sendMessage(uid, { message: config.recruitment.confirmationMessage });
     await logInteraction({
-      userId,
-      messageId: Number(message.id),
+      userId: uid,
+      messageId: Number(m.id),
       eventType: "onboarding",
       trackingId: generateTrackingId(),
-      meta: {
-        email: text.trim(),
-        referrerId: referrerId || null,
-        step: "complete"
-      }
+      meta: { email: text.trim(), referrerId: referrerId || null, step: "complete" },
     });
-    
-    // Log conversion for A/B testing if we have a variant
-    const variantKey = `variant:${userId}`;
-    const variantIndex = await redis.get(variantKey);
-    if (variantIndex) {
-      await logABTest(userId, parseInt(variantIndex), "conversion");
-    }
-    
-    await markReplyInDM(userId);
+    const variant = await redis.get(`variant:${uid}`);
+    if (variant) await logABTest(uid, parseInt(variant), "conversion");
+    await markReplyInDM(uid);
     return;
   }
-  
-  // Handle other DM queries with a helpful response
+
   const analysis = await analyzeMessage(text);
-  
   if (!analysis) {
-    await client.sendMessage(userId, { 
-      message: "I'm GasGuardian, your crypto assistant! Ask about gas prices, trending tokens, or DeFi news."
+    await client.sendMessage(uid, {
+      message:
+        "I'm GasGuardian! Ask about gas prices, trending tokens, or DeFi news.",
     });
-    await markReplyInDM(userId);
+    await markReplyInDM(uid);
     return;
   }
-  
   const insights = await getRelevantInsights(analysis);
-  
-  if (insights.length === 0) {
-    // Fallback if no relevant insights
-    await client.sendMessage(userId, { 
-      message: "I'm GasGuardian, your crypto assistant! Ask about gas prices, trending tokens, or DeFi news."
+  if (!insights.length) {
+    await client.sendMessage(uid, {
+      message:
+        "I'm GasGuardian! Ask about gas prices, trending tokens, or DeFi news.",
     });
   } else {
-    // Respond with best insight
-    const bestInsight = insights[0];
-    await client.sendMessage(userId, { 
-      message: bestInsight.text
-    });
-    
-    // Log interaction
+    const best = insights[0];
+    await client.sendMessage(uid, { message: best.text });
     await logInteraction({
-      userId,
-      messageId: Number(message.id),
+      userId: uid,
+      messageId: Number(m.id),
       eventType: "dm_reply",
       trackingId: generateTrackingId(),
-      source: bestInsight.source
+      source: best.source,
     });
   }
-  
-  await markReplyInDM(userId);
+  await markReplyInDM(uid);
 }
 
-// ==========================================================
-// CLICK TRACKING (WEBHOOK HANDLER)
-// ==========================================================
-
-/**
- * Process a click on a tracking link
- * This would normally be a webhook endpoint, but we simulate it here
- */
-async function processClick(trackingId: string, userId: number): Promise<void> {
-  // Log the click
+/* ---------- 20. CLICK TRACKING (placeholder) ------------- */
+async function processClick(trackingId: string, uid: number) {
   await logInteraction({
-    userId,
-    messageId: 0, // Not applicable for clicks
+    userId: uid,
+    messageId: 0,
     eventType: "click",
-    trackingId
+    trackingId,
   });
-  
-  // Store referrer info
-  await redis.set(`referrer:${userId}`, userId.toString(), "EX", 604800); // 7 days
-  
-  // For A/B testing
-  const variantIndex = await redis.get(`variant:impression:${trackingId}`);
-  if (variantIndex) {
-    await logABTest(userId, parseInt(variantIndex), "click");
-  }
+  await redis.set(`referrer:${uid}`, uid.toString(), "EX", 604800);
+  const variant = await redis.get(`variant:impression:${trackingId}`);
+  if (variant) await logABTest(uid, parseInt(variant), "click");
 }
 
-// ==========================================================
-// SCHEDULE JOBS
-// ==========================================================
-
-/**
- * Setup scheduled jobs
- */
-function setupScheduledJobs(client: TelegramClient): void {
-  // Group discovery
-  schedule.scheduleJob(config.schedules.discoveryTime, async () => {
-    await discoverGroups(client);
-  });
-  
-  // Analytics reporting
+/* ---------- 21. SCHEDULE JOBS ---------------------------- */
+function setupScheduledJobs(client: TelegramClient) {
+  schedule.scheduleJob(config.schedules.discoveryTime, () => discoverGroups(client));
   schedule.scheduleJob(config.schedules.analyticsTime, async () => {
-    // Generate and send analytics report
     const stats = await generateOwnerStats();
     await client.sendMessage(config.telegram.ownerChat, { message: stats });
   });
-  
-  // Leaderboard
   schedule.scheduleJob(config.schedules.leaderboardTime, async () => {
-    // Generate and send leaderboard
-    const leaderboard = await generateReferralLeaderboard();
-    await client.sendMessage(config.telegram.ownerChat, { message: leaderboard });
+    const board = await generateReferralLeaderboard();
+    await client.sendMessage(config.telegram.ownerChat, { message: board });
   });
-  
-  // A/B test analysis
-  schedule.scheduleJob("0 0 * * 0", async () => {
-    // Weekly A/B test analysis
-    await analyzeABTestResults();
-  });
+  schedule.scheduleJob("0 0 * * 0", analyzeABTestResults); // weekly test analysis
 }
 
-// ==========================================================
-// MAIN RUNTIME
-// ==========================================================
-
-// Initialize Telegram client
+/* ---------- 22. MAIN RUNTIME ----------------------------- */
 const client = new TelegramClient(
   new StringSession(config.telegram.session),
   config.telegram.apiId,
   config.telegram.apiHash,
-  {
-    connectionRetries: 5
-  }
+  { connectionRetries: 5 }
 );
 
-// Main function
 async function main() {
-  // Start client
   await client.start({
     phoneNumber: async () => "",
     password: async () => "",
     phoneCode: async () => "",
-    onError: err => console.error(err)
+    onError: (err) => console.error(err),
   });
-  
-  console.log("GasGuardian userbot started!");
-  
-  // Set up scheduled jobs
+  console.log("🚀 GasGuardian userbot started!");
+
   setupScheduledJobs(client);
-  
-  // Set up message event handler
-  client.addEventHandler(async (event: NewMessageEvent) => {
-    try {
-      const message = event.message;
-      
-      // Skip own messages
-      if (message.out) return;
-      
-      // Process direct messages
-      if (message.peerId?.className === "PeerUser") {
-        await handleDirectMessage(event);
-        return;
+
+  client.addEventHandler(
+    async (e: NewMessageEvent) => {
+      try {
+        const msg = e.message;
+        if (msg.out) return;
+        if (msg.peerId?.className === "PeerUser") {
+          await handleDirectMessage(e);
+        } else if (
+          msg.peerId?.className === "PeerChat" ||
+          msg.peerId?.className === "PeerChannel"
+        ) {
+          await handleGroupMessage(e);
+        }
+      } catch (err) {
+        console.error("Event handler error:", err);
       }
-      
-      // Process group messages
-      if (message.peerId?.className === "PeerChat" || message.peerId?.className === "PeerChannel") {
-        await handleGroupMessage(event);
-        return;
-      }
-    } catch (error) {
-      console.error("Error processing message:", error);
-    }
-  }, new NewMessage({}));
-  
-  // Run initial discovery
+    },
+    new NewMessage({})
+  );
+
   await discoverGroups(client);
 }
 
-// Start the bot
 main().catch(console.error);
