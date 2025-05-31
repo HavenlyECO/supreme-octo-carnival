@@ -37,6 +37,7 @@ const env = {
   CRYPTO_PANIC_KEY: getEnv("CRYPTO_PANIC_KEY", false),
   COINGLASS_KEY: getEnv("COINGLASS_KEY", false),
   DAPPRADAR_KEY: getEnv("DAPPRADAR_KEY", false),
+  TGSTAT_KEY: getEnv("TGSTAT_KEY", false), // <-- NEW TGSTAT API KEY
   REDIS_URL: getEnv("REDIS_URL", false) || "redis://localhost:6379",
   DATABASE_URL: getEnv("DATABASE_URL", false),
 };
@@ -79,6 +80,7 @@ const config = {
     cryptoPanicKey: env.CRYPTO_PANIC_KEY,
     coinglassKey: env.COINGLASS_KEY,
     dappRadarKey: env.DAPPRADAR_KEY,
+    tgstatKey: env.TGSTAT_KEY, // <-- NEW
   },
   db: {
     testerTable: "BetaTester",
@@ -139,6 +141,7 @@ enum DataSourceType {
   COINGLASS = "coinglass",
   DAPPRADAR = "dappradar",
   GPT = "gpt",
+  TGSTAT = "tgstat", // NEW
 }
 interface AnalyzedMessage {
   isEnglish: boolean;
@@ -160,6 +163,24 @@ const redis = new Redis(env.REDIS_URL);
 const prisma = new PrismaClient();
 
 // ----------- UTILITIES -----------
+
+// --- TGStat Info Utility ---
+async function fetchTGStatInfo(usernameOrId: string) {
+  if (!config.api.tgstatKey) return null;
+  try {
+    const res = await axios.get(`https://api.tgstat.com/chats/statistics`, {
+      params: {
+        token: config.api.tgstatKey,
+        chat_id: usernameOrId,
+      },
+      timeout: 8000,
+    });
+    return res.data?.response || null;
+  } catch (e) {
+    return null;
+  }
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const toBigInt = (v: any): bigint => typeof v === "bigint" ? v : BigInt(v);
 function isBlacklistedGroup(g: { title?: string; description?: string; username?: string; memberCount?: number }): boolean {
@@ -205,6 +226,17 @@ async function discoverGroups(client: TelegramClient) {
         const memberCount = (chat as any).participantsCount ?? undefined;
         const description = (chat as any).about as string | undefined;
         const isBad = isBlacklistedGroup({ title, description, username, memberCount });
+
+        // ---- TGStat Enrichment ----
+        let tgstatInfo: any = null;
+        if (username) tgstatInfo = await fetchTGStatInfo(username);
+
+        // Exclude broadcast channels with no discussion/comments
+        let isDiscussion = true;
+        if (tgstatInfo && tgstatInfo.type === 'channel' && !tgstatInfo.linked_chat_id && !tgstatInfo.comments_enabled) {
+          isDiscussion = false;
+        }
+
         await prisma.discoveredGroup.upsert({
           where: { id: chatIdBig },
           update: {
@@ -214,8 +246,8 @@ async function discoverGroups(client: TelegramClient) {
             memberCount,
             description,
             isMonitored: false,
-            blacklisted: isBad,
-            autoJoinStatus: isBad ? "blacklisted" : (isChannel && !!username && memberCount && memberCount >= config.discovery.minPublicMemberCount ? "eligible" : "ineligible"),
+            blacklisted: isBad || !isDiscussion,
+            autoJoinStatus: (isBad || !isDiscussion) ? "blacklisted" : (isChannel && !!username && memberCount && memberCount >= config.discovery.minPublicMemberCount ? "eligible" : "ineligible"),
           },
           create: {
             id: chatIdBig,
@@ -228,8 +260,8 @@ async function discoverGroups(client: TelegramClient) {
             lastCheckedAt: new Date(),
             keyword: kw,
             isMonitored: false,
-            blacklisted: isBad,
-            autoJoinStatus: isBad ? "blacklisted" : (isChannel && !!username && memberCount && memberCount >= config.discovery.minPublicMemberCount ? "eligible" : "ineligible"),
+            blacklisted: isBad || !isDiscussion,
+            autoJoinStatus: (isBad || !isDiscussion) ? "blacklisted" : (isChannel && !!username && memberCount && memberCount >= config.discovery.minPublicMemberCount ? "eligible" : "ineligible"),
           },
         });
         await prisma.discoveryLog.create({ data: { groupId: chatIdBig, title, keyword: kw, timestamp: new Date(), memberCount } });
@@ -238,6 +270,7 @@ async function discoverGroups(client: TelegramClient) {
     } catch (e) { }
   }
 }
+
 async function joinHighlyConvertibleGroups(client: TelegramClient) {
   const candidates = await prisma.discoveredGroup.findMany({
     where: {
@@ -256,6 +289,16 @@ async function joinHighlyConvertibleGroups(client: TelegramClient) {
       await prisma.discoveredGroup.update({
         where: { id: toBigInt(group.id) },
         data: { blacklisted: true, removalReason: "Auto-join: Detected as blacklisted" },
+      });
+      continue;
+    }
+    // --- Remove broadcast-only channels (TGStat check) ---
+    let tgstatInfo: any = null;
+    if (group.username) tgstatInfo = await fetchTGStatInfo(group.username);
+    if (tgstatInfo && tgstatInfo.type === 'channel' && !tgstatInfo.linked_chat_id && !tgstatInfo.comments_enabled) {
+      await prisma.discoveredGroup.update({
+        where: { id: toBigInt(group.id) },
+        data: { blacklisted: true, removalReason: "Auto-join: Broadcast-only (no discussion/comments)" },
       });
       continue;
     }
@@ -279,6 +322,7 @@ async function joinHighlyConvertibleGroups(client: TelegramClient) {
     }
   }
 }
+
 async function autoRemoveGroup(client: TelegramClient, groupId: bigint | number, reason: string, initiatorId?: number) {
   const group = await prisma.discoveredGroup.findUnique({ where: { id: BigInt(groupId) } });
   if (!group) return;
@@ -305,10 +349,21 @@ async function autoRemoveGroup(client: TelegramClient, groupId: bigint | number,
     });
   }
 }
+
+// --- AUTO AUDIT W/ TGSTAT ---
 async function autoAuditGroups(client: TelegramClient) {
   const joined = await prisma.discoveredGroup.findMany({ where: { isMonitored: true, blacklisted: false }, orderBy: { memberCount: "asc" } });
   for (const g of joined) {
-    if (isBlacklistedGroup(g)) await autoRemoveGroup(client, g.id, "Auto-audit: Blacklist/Size/Spam detected");
+    // --- TGStat: Remove dead/discussion-disabled groups ---
+    let tgstatInfo: any = null;
+    if (g.username) tgstatInfo = await fetchTGStatInfo(g.username);
+    if (isBlacklistedGroup(g) ||
+        (tgstatInfo && tgstatInfo.type === 'channel' && !tgstatInfo.linked_chat_id && !tgstatInfo.comments_enabled) ||
+        (tgstatInfo && tgstatInfo.members_count < config.discovery.minPublicMemberCount) ||
+        (tgstatInfo && tgstatInfo.growth_7d < 1)
+    ) {
+      await autoRemoveGroup(client, g.id, "Auto-audit: Dead, no comments, or TGStat flagged");
+    }
   }
 }
 
