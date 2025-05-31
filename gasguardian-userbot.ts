@@ -10,9 +10,10 @@ import OpenAI from "openai";
 import axios from "axios";
 import Redis from "ioredis";
 import { PrismaClient } from "@prisma/client";
-import schedule from "node-schedule";
+import { v4 as uuidv4 } from "uuid";
 import { DateTime } from "luxon";
 import * as crypto from "crypto";
+import schedule from "node-schedule";
 
 // --------------- ENV AND CONFIG ---------------
 function getEnv(name: string, required: boolean = true): string {
@@ -31,6 +32,11 @@ const env = {
   OWNER_CHAT_ID: parseInt(getEnv("OWNER_CHAT_ID")),
   OPENAI_API_KEY: getEnv("OPENAI_API_KEY"),
   BITLY_TOKEN: getEnv("BITLY_TOKEN", false),
+  BLOCKNATIVE_KEY: getEnv("BLOCKNATIVE_KEY", false),
+  BITQUERY_KEY: getEnv("BITQUERY_KEY", false),
+  CRYPTO_PANIC_KEY: getEnv("CRYPTO_PANIC_KEY", false),
+  COINGLASS_KEY: getEnv("COINGLASS_KEY", false),
+  DAPPRADAR_KEY: getEnv("DAPPRADAR_KEY", false),
   REDIS_URL: getEnv("REDIS_URL", false) || "redis://localhost:6379",
   DATABASE_URL: getEnv("DATABASE_URL", false),
 };
@@ -47,9 +53,12 @@ const config = {
     minGroupGapSec: 900,
     minUserGapSec: 3600,
     dmRateLimitSec: 60,
-    ctaCooldownHours: 24,
-    sentimentThreshold: 0.6,
+    rateBackoffMultiplier: 1.5,
+    skipMsg: "SKIP",
     testingLimit: 100,
+    languageProbability: 0.85,
+    sentimentThreshold: 0.6,
+    ctaCooldownHours: 24,
   },
   recruitment: {
     ctaVariants: [
@@ -58,29 +67,18 @@ const config = {
       "Gas bothering you? DM '/test' for our solution's beta.",
       "Join 100 exclusive testers: DM '/test' now.",
     ],
-    betaInstructions: "You're in! Reply with your Gmail address.",
-    confirmationMessage: "Thanks! You'll get an invite within 24h.",
+    betaInstructions:
+      "You're in! We'll whitelist your email for the GasGuardian Android beta. Please reply with your Gmail address.",
+    confirmationMessage:
+      "Thanks! You're now on our VIP beta list. You'll receive an invite within 24h. Early access, priority support, and gas refunds await!",
   },
-  discovery: {
-    keywords: [
-      "gas", "eth", "ethereum", "defi", "nft", "crypto", "blockchain",
-      "airdrop", "layer2", "degen", "token", "polygon", "arbitrum",
-      "optimism", "base", "solana", "trading", "yield", "staking",
-    ],
-    maxGroupsPerSearch: 15,
-    blacklistedWords: [
-      "scam", "porn", "betting", "gambling", "giveaway", "casino", "bonus", "pump", "moon", "hacking",
-      "xxx", "sex", "bet", "gamble", "mlm", "signal", "robot", "spam"
-    ],
-    minPublicMemberCount: 500,
-    autoJoinLimit: 2,
-  },
-  schedules: {
-    discoveryTime: "*/1 * * * *", // every 1 minute
-    joinTime: "10,40 * * * *",    // every 30 minutes
-    analyticsTime: "0 0 * * *",
-    leaderboardTime: "0 12 * * 1",
-    auditTime: "15,45 * * * *",
+  api: {
+    bitlyToken: env.BITLY_TOKEN,
+    blocknativeKey: env.BLOCKNATIVE_KEY,
+    bitqueryKey: env.BITQUERY_KEY,
+    cryptoPanicKey: env.CRYPTO_PANIC_KEY,
+    coinglassKey: env.COINGLASS_KEY,
+    dappRadarKey: env.DAPPRADAR_KEY,
   },
   db: {
     testerTable: "BetaTester",
@@ -90,8 +88,71 @@ const config = {
     discoveredGroupTable: "DiscoveredGroup",
     discoveryLogTable: "DiscoveryLog",
     abTestTable: "AbTestResult",
+  },
+  discovery: {
+    keywords: [
+      "gas", "eth", "ethereum", "defi", "nft", "crypto", "blockchain",
+      "airdrop", "layer2", "degen", "token", "polygon", "arbitrum",
+      "optimism", "base", "solana", "trading", "yield", "staking",
+    ],
+    intervalHours: 12,
+    maxGroupsPerSearch: 15,
+    minGroupSize: 100,
+    blacklistedWords: [
+      "scam", "porn", "betting", "gambling", "giveaway", "casino", "bonus", "pump", "moon", "hacking",
+      "xxx", "sex", "bet", "gamble", "mlm", "signal", "robot", "spam"
+    ],
+    minPublicMemberCount: 500,
+    autoJoinLimit: 2,
+  },
+  schedules: {
+    discoveryTime: "*/1 * * * *",
+    joinTime: "10,40 * * * *",
+    analyticsTime: "0 0 * * *",
+    leaderboardTime: "0 12 * * 1",
+    auditTime: "15,45 * * * *",
   }
 };
+
+// ----------- ENUMS & TYPES -----------
+const chains = [
+  { id: 1, name: "Ethereum", symbol: "ETH", emoji: "⛽" },
+  { id: 137, name: "Polygon", symbol: "MATIC", emoji: "🟣" },
+  { id: 56, name: "BNB Chain", symbol: "BNB", emoji: "🟨" },
+  { id: 42161, name: "Arbitrum", symbol: "ETH", emoji: "🔵" },
+  { id: 10, name: "Optimism", symbol: "ETH", emoji: "🔴" },
+  { id: 8453, name: "Base", symbol: "ETH", emoji: "🔷" },
+];
+enum MessageIntentType {
+  GAS_COMPLAINT = "gas_complaint",
+  TOKEN_INQUIRY = "token_inquiry",
+  DEFI_QUESTION = "defi_question",
+  NFT_DISCUSSION = "nft_discussion",
+  GENERAL_CRYPTO = "general_crypto",
+  OFF_TOPIC = "off_topic",
+}
+enum DataSourceType {
+  BLOCKNATIVE = "blocknative",
+  BITQUERY = "bitquery",
+  COINGECKO = "coingecko",
+  CRYPTOPANIC = "cryptopanic",
+  COINGLASS = "coinglass",
+  DAPPRADAR = "dappradar",
+  GPT = "gpt",
+}
+interface AnalyzedMessage {
+  isEnglish: boolean;
+  sentiment: number;
+  intent: MessageIntentType;
+  entities: { chains: string[]; tokens: string[]; protocols: string[] };
+  keywords: string[];
+}
+interface DataInsight {
+  text: string;
+  source: DataSourceType;
+  relevanceScore: number;
+  timestamp: Date;
+}
 
 // ----------- CLIENTS -----------
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
@@ -101,7 +162,6 @@ const prisma = new PrismaClient();
 // ----------- UTILITIES -----------
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const toBigInt = (v: any): bigint => typeof v === "bigint" ? v : BigInt(v);
-
 function isBlacklistedGroup(g: { title?: string; description?: string; username?: string; memberCount?: number }): boolean {
   const badWords = config.discovery.blacklistedWords;
   const text = `${g.title || ""} ${(g.description || "")}`.toLowerCase();
@@ -111,15 +171,31 @@ function isBlacklistedGroup(g: { title?: string; description?: string; username?
   return hasBad || userBad || tooSmall;
 }
 
-// ------------- GROUP DISCOVERY, JOIN, AUDIT, REMOVE -------------
+// --- Redis-based rate limiters ---
+async function canReplyInGroup(chatId: number) {
+  const key = `ratelimit:group:${chatId}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.minGroupGapSec * 1e3;
+}
+async function canReplyToUser(uid: number) {
+  const key = `ratelimit:user:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.minUserGapSec * 1e3;
+}
+async function canReplyInDM(uid: number) {
+  const key = `ratelimit:dm:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.dmRateLimitSec * 1e3;
+}
+async function markReplyInGroup(cid: number) { await redis.set(`ratelimit:group:${cid}`, Date.now().toString()); }
+async function markReplyToUser(uid: number) { await redis.set(`ratelimit:user:${uid}`, Date.now().toString()); }
+async function markReplyInDM(uid: number) { await redis.set(`ratelimit:dm:${uid}`, Date.now().toString()); }
+
+// --- DISCOVERY, JOIN, AUDIT, REMOVE, ADMIN ---
 async function discoverGroups(client: TelegramClient) {
-  console.log(`[${new Date().toISOString()}] Starting group discovery…`);
-  let total = 0;
   for (const kw of config.discovery.keywords) {
     try {
-      const result = await client.invoke(
-        new Api.contacts.Search({ q: kw, limit: config.discovery.maxGroupsPerSearch })
-      );
+      const result = await client.invoke(new Api.contacts.Search({ q: kw, limit: config.discovery.maxGroupsPerSearch }));
       for (const chat of result.chats) {
         if (!("title" in chat)) continue;
         const chatIdBig = toBigInt(chat.id);
@@ -129,7 +205,6 @@ async function discoverGroups(client: TelegramClient) {
         const memberCount = (chat as any).participantsCount ?? undefined;
         const description = (chat as any).about as string | undefined;
         const isBad = isBlacklistedGroup({ title, description, username, memberCount });
-
         await prisma.discoveredGroup.upsert({
           where: { id: chatIdBig },
           update: {
@@ -157,19 +232,12 @@ async function discoverGroups(client: TelegramClient) {
             autoJoinStatus: isBad ? "blacklisted" : (isChannel && !!username && memberCount && memberCount >= config.discovery.minPublicMemberCount ? "eligible" : "ineligible"),
           },
         });
-        await prisma.discoveryLog.create({
-          data: { groupId: chatIdBig, title, keyword: kw, timestamp: new Date(), memberCount },
-        });
-        total++;
+        await prisma.discoveryLog.create({ data: { groupId: chatIdBig, title, keyword: kw, timestamp: new Date(), memberCount } });
       }
       await sleep(2e3);
-    } catch (e) {
-      console.error(`Discovery error for '${kw}':`, e);
-    }
+    } catch (e) { }
   }
-  console.log(`[${new Date().toISOString()}] Discovery complete – ${total} groups`);
 }
-
 async function joinHighlyConvertibleGroups(client: TelegramClient) {
   const candidates = await prisma.discoveredGroup.findMany({
     where: {
@@ -183,7 +251,6 @@ async function joinHighlyConvertibleGroups(client: TelegramClient) {
     orderBy: { memberCount: "desc" },
     take: config.discovery.autoJoinLimit,
   });
-
   for (const group of candidates) {
     if (isBlacklistedGroup(group)) {
       await prisma.discoveredGroup.update({
@@ -193,11 +260,7 @@ async function joinHighlyConvertibleGroups(client: TelegramClient) {
       continue;
     }
     try {
-      await client.invoke(
-        new Api.channels.JoinChannel({
-          channel: group.username!.startsWith("@") ? group.username : `@${group.username}`,
-        })
-      );
+      await client.invoke(new Api.channels.JoinChannel({ channel: group.username!.startsWith("@") ? group.username : `@${group.username}` }));
       await prisma.discoveredGroup.update({
         where: { id: toBigInt(group.id) },
         data: {
@@ -210,25 +273,17 @@ async function joinHighlyConvertibleGroups(client: TelegramClient) {
         create: { id: toBigInt(group.id), joinedAt: new Date(), group: { connect: { id: toBigInt(group.id) } } },
         update: { lastActive: new Date() }
       });
-      console.log(`[Auto-Join] Joined & monitoring: @${group.username} (${group.id})`);
       await sleep(2000);
     } catch (err) {
-      await prisma.discoveredGroup.update({
-        where: { id: toBigInt(group.id) },
-        data: { autoJoinStatus: "failed" },
-      });
-      console.warn(`[Auto-Join] Failed to join @${group.username}:`, err);
+      await prisma.discoveredGroup.update({ where: { id: toBigInt(group.id) }, data: { autoJoinStatus: "failed" } });
     }
   }
 }
-
 async function autoRemoveGroup(client: TelegramClient, groupId: bigint | number, reason: string, initiatorId?: number) {
   const group = await prisma.discoveredGroup.findUnique({ where: { id: BigInt(groupId) } });
   if (!group) return;
   try {
-    if (group.username) {
-      await client.invoke(new Api.channels.LeaveChannel({ channel: group.username.startsWith("@") ? group.username : "@" + group.username }));
-    }
+    if (group.username) await client.invoke(new Api.channels.LeaveChannel({ channel: group.username.startsWith("@") ? group.username : "@" + group.username }));
   } catch {}
   await prisma.discoveredGroup.update({
     where: { id: BigInt(groupId) },
@@ -250,35 +305,27 @@ async function autoRemoveGroup(client: TelegramClient, groupId: bigint | number,
     });
   }
 }
-
 async function autoAuditGroups(client: TelegramClient) {
-  const joined = await prisma.discoveredGroup.findMany({
-    where: { isMonitored: true, blacklisted: false },
-    orderBy: { memberCount: "asc" },
-  });
+  const joined = await prisma.discoveredGroup.findMany({ where: { isMonitored: true, blacklisted: false }, orderBy: { memberCount: "asc" } });
   for (const g of joined) {
-    if (isBlacklistedGroup(g)) {
-      await autoRemoveGroup(client, g.id, "Auto-audit: Blacklist/Size/Spam detected");
-    }
+    if (isBlacklistedGroup(g)) await autoRemoveGroup(client, g.id, "Auto-audit: Blacklist/Size/Spam detected");
   }
 }
 
-// ------------- SCHEDULE JOBS -------------
+// --- SCHEDULED JOBS ---
 function setupScheduledJobs(client: TelegramClient) {
   schedule.scheduleJob(config.schedules.discoveryTime, () => discoverGroups(client));
   schedule.scheduleJob(config.schedules.joinTime, () => joinHighlyConvertibleGroups(client));
   schedule.scheduleJob(config.schedules.auditTime, () => autoAuditGroups(client));
-  // ... add analytics & leaderboard jobs as needed ...
 }
 
-// ------------- MAIN RUNTIME -------------
+// --- MAIN RUNTIME ---
 const client = new TelegramClient(
   new StringSession(config.telegram.session),
   config.telegram.apiId,
   config.telegram.apiHash,
   { connectionRetries: 5 }
 );
-
 async function main() {
   await client.start({
     phoneNumber: async () => "",
@@ -286,16 +333,13 @@ async function main() {
     phoneCode: async () => "",
     onError: (err) => console.error(err),
   });
-  console.log("🚀 GasGuardian userbot started!");
   setupScheduledJobs(client);
-
   client.addEventHandler(
     async (e: NewMessageEvent) => {
       try {
         const msg = e.message;
         if (msg.out) return;
         if (msg.peerId?.className === "PeerUser") {
-          // Owner blacklist/audit commands (as shown in previous snippets)
           if (msg.senderId == config.telegram.ownerChat) {
             if (/^\/blacklist (\d+)/i.test(msg.message)) {
               const groupId = BigInt(msg.message.match(/^\/blacklist (\d+)/i)![1]);
@@ -317,19 +361,12 @@ async function main() {
               await e.reply({ message: msgTxt });
               return;
             }
-            // ...other admin commands here...
           }
-          // ...other DM handler logic...
         }
-        // ...group message handler logic...
-      } catch (err) {
-        console.error("Event handler error:", err);
-      }
+      } catch (err) { }
     },
     new NewMessage({})
   );
-
   await discoverGroups(client);
 }
-
 main().catch(console.error);
