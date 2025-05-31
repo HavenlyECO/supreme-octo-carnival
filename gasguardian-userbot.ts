@@ -106,7 +106,7 @@ const config = {
     autoJoinLimit: 2,
   },
   schedules: {
-    discoveryTime: "*/5 * * * *", // <--- EVERY 5 MINUTES
+    discoveryTime: "0 2 * * *", // <--- ONCE PER DAY AT 2:00 AM UTC
     joinTime: "10,40 * * * *",
     analyticsTime: "0 0 * * *",
     leaderboardTime: "0 12 * * 1",
