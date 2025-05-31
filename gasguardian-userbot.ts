@@ -95,14 +95,14 @@ const config = {
     dappRadarKey: env.DAPPRADAR_KEY,
   },
   db: {
-    testerTable: "beta_testers",
-    interactionTable: "interactions",
-    analyticsTable: "analytics",
-    referralTable: "referrals",
-    groupTable: "monitored_groups",
-    discoveredGroupTable: "discovered_groups",
-    discoveryLogTable: "discovery_logs",
-    abTestTable: "ab_test_results",
+    testerTable: "BetaTester",
+    interactionTable: "Interaction",
+    analyticsTable: "Analytics",
+    referralTable: "Referral",
+    groupTable: "MonitoredGroup",
+    discoveredGroupTable: "DiscoveredGroup",
+    discoveryLogTable: "DiscoveryLog",
+    abTestTable: "AbTestResult",
   },
   discovery: {
     keywords: [
@@ -934,4 +934,4 @@ async function main() {
   await discoverGroups(client);
 }
 
-main().catch(console.error);
+main().catch(console.error); 
