@@ -126,10 +126,113 @@ const config = {
 };
 
 /* ---------- 5. CHAINS, ENUMS, TYPES ---------------------- */
-// ... (unchanged) ...
+const chains = [
+  { id: 1, name: "Ethereum", symbol: "ETH", emoji: "⛽" },
+  { id: 137, name: "Polygon", symbol: "MATIC", emoji: "🟣" },
+  { id: 56, name: "BNB Chain", symbol: "BNB", emoji: "🟨" },
+  { id: 42161, name: "Arbitrum", symbol: "ETH", emoji: "🔵" },
+  { id: 10, name: "Optimism", symbol: "ETH", emoji: "🔴" },
+  { id: 8453, name: "Base", symbol: "ETH", emoji: "🔷" },
+];
+
+enum MessageIntentType {
+  GAS_COMPLAINT = "gas_complaint",
+  TOKEN_INQUIRY = "token_inquiry",
+  DEFI_QUESTION = "defi_question",
+  NFT_DISCUSSION = "nft_discussion",
+  GENERAL_CRYPTO = "general_crypto",
+  OFF_TOPIC = "off_topic",
+}
+
+enum DataSourceType {
+  BLOCKNATIVE = "blocknative",
+  BITQUERY = "bitquery",
+  COINGECKO = "coingecko",
+  CRYPTOPANIC = "cryptopanic",
+  COINGLASS = "coinglass",
+  DAPPRADAR = "dappradar",
+  GPT = "gpt",
+}
+
+interface AnalyzedMessage {
+  isEnglish: boolean;
+  sentiment: number;
+  intent: MessageIntentType;
+  entities: { chains: string[]; tokens: string[]; protocols: string[] };
+  keywords: string[];
+}
+
+interface DataInsight {
+  text: string;
+  source: DataSourceType;
+  relevanceScore: number;
+  timestamp: Date;
+}
+
+interface ReplyVariant {
+  template: string;
+  emoji: string;
+  cta: boolean;
+  bitlyUrl?: string;
+}
+
+interface DiscoveredGroup {
+  id: number;
+  title: string;
+  username?: string;
+  memberCount?: number;
+  description?: string;
+  isChannel: boolean;
+  discoveredAt: Date;
+  keyword: string;
+  lastCheckedAt: Date;
+  isMonitored: boolean;
+  autoJoinStatus?: string;
+}
 
 /* ---------- 6. UTILITIES --------------------------------- */
-// ... (unchanged) ...
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const toBigInt = (v: any): bigint => {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "number") return BigInt(v);
+  if (typeof v === "string") return BigInt(v);
+  return BigInt(v.toString());
+};
+async function canReplyInGroup(chatId: number) {
+  const key = `ratelimit:group:${chatId}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.minGroupGapSec * 1e3;
+}
+async function canReplyToUser(uid: number) {
+  const key = `ratelimit:user:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.minUserGapSec * 1e3;
+}
+async function canReplyInDM(uid: number) {
+  const key = `ratelimit:dm:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.dmRateLimitSec * 1e3;
+}
+async function markReplyInGroup(cid: number) {
+  await redis.set(`ratelimit:group:${cid}`, Date.now().toString());
+}
+async function markReplyToUser(uid: number) {
+  await redis.set(`ratelimit:user:${uid}`, Date.now().toString());
+}
+async function markReplyInDM(uid: number) {
+  await redis.set(`ratelimit:dm:${uid}`, Date.now().toString());
+}
+async function canShowCTA(uid: number) {
+  const key = `cta:cooldown:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.ctaCooldownHours * 3600 * 1e3;
+}
+async function markCTAShown(uid: number) {
+  await redis.set(`cta:cooldown:${uid}`, Date.now().toString());
+}
+function generateTrackingId(): string {
+  return crypto.randomBytes(4).toString("hex");
+}
 
 /* ---------- 7. DISCOVERY & OWNER COMMANDS ---------------- */
 async function discoverGroups(client: TelegramClient) {
