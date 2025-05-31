@@ -126,10 +126,115 @@ const config = {
 };
 
 /* ---------- 5. CHAINS, ENUMS, TYPES ---------------------- */
-// ... (unchanged, as in your repo) ...
+const chains = [
+  { id: 1, name: "Ethereum", symbol: "ETH", emoji: "⛽" },
+  { id: 137, name: "Polygon", symbol: "MATIC", emoji: "🟣" },
+  { id: 56, name: "BNB Chain", symbol: "BNB", emoji: "🟨" },
+  { id: 42161, name: "Arbitrum", symbol: "ETH", emoji: "🔵" },
+  { id: 10, name: "Optimism", symbol: "ETH", emoji: "🔴" },
+  { id: 8453, name: "Base", symbol: "ETH", emoji: "🔷" },
+];
+
+enum MessageIntentType {
+  GAS_COMPLAINT = "gas_complaint",
+  TOKEN_INQUIRY = "token_inquiry",
+  DEFI_QUESTION = "defi_question",
+  NFT_DISCUSSION = "nft_discussion",
+  GENERAL_CRYPTO = "general_crypto",
+  OFF_TOPIC = "off_topic",
+}
+
+enum DataSourceType {
+  BLOCKNATIVE = "blocknative",
+  BITQUERY = "bitquery",
+  COINGECKO = "coingecko",
+  CRYPTOPANIC = "cryptopanic",
+  COINGLASS = "coinglass",
+  DAPPRADAR = "dappradar",
+  GPT = "gpt",
+}
+
+interface AnalyzedMessage {
+  isEnglish: boolean;
+  sentiment: number;
+  intent: MessageIntentType;
+  entities: { chains: string[]; tokens: string[]; protocols: string[] };
+  keywords: string[];
+}
+
+interface DataInsight {
+  text: string;
+  source: DataSourceType;
+  relevanceScore: number;
+  timestamp: Date;
+}
+
+interface ReplyVariant {
+  template: string;
+  emoji: string;
+  cta: boolean;
+  bitlyUrl?: string;
+}
+
+interface DiscoveredGroup {
+  id: number;
+  title: string;
+  username?: string;
+  memberCount?: number;
+  description?: string;
+  isChannel: boolean;
+  discoveredAt: Date;
+  keyword: string;
+  lastCheckedAt: Date;
+  isMonitored: boolean;
+  autoJoinStatus?: string;
+}
 
 /* ---------- 6. UTILITIES --------------------------------- */
-// ... (unchanged, as in your repo) ...
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const toBigInt = (v: any): bigint => {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "number") return BigInt(v);
+  if (typeof v === "string") return BigInt(v);
+  return BigInt(v.toString());
+};
+/* ... more utilities ... */
+/* ---------- 6. UTILITIES (continued) --------------------- */
+async function canReplyInGroup(chatId: number) {
+  const key = `ratelimit:group:${chatId}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.minGroupGapSec * 1e3;
+}
+async function canReplyToUser(uid: number) {
+  const key = `ratelimit:user:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.minUserGapSec * 1e3;
+}
+async function canReplyInDM(uid: number) {
+  const key = `ratelimit:dm:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.dmRateLimitSec * 1e3;
+}
+async function markReplyInGroup(cid: number) {
+  await redis.set(`ratelimit:group:${cid}`, Date.now().toString());
+}
+async function markReplyToUser(uid: number) {
+  await redis.set(`ratelimit:user:${uid}`, Date.now().toString());
+}
+async function markReplyInDM(uid: number) {
+  await redis.set(`ratelimit:dm:${uid}`, Date.now().toString());
+}
+async function canShowCTA(uid: number) {
+  const key = `cta:cooldown:${uid}`;
+  const last = await redis.get(key);
+  return !last || Date.now() - parseInt(last) > config.reply.ctaCooldownHours * 3600 * 1e3;
+}
+async function markCTAShown(uid: number) {
+  await redis.set(`cta:cooldown:${uid}`, Date.now().toString());
+}
+function generateTrackingId(): string {
+  return crypto.randomBytes(4).toString("hex");
+}
 
 /* ---------- 7. DISCOVERY & OWNER COMMANDS ---------------- */
 async function discoverGroups(client: TelegramClient) {
@@ -263,8 +368,66 @@ async function sendDiscoveryReport(client: TelegramClient) {
 }
 
 /* ---------- 8. ANALYTICS / LEADERBOARD ------------------- */
-// ... (all your analytics, A/B test, fetchers, handlers, and logic remain unchanged) ...
+// ... full analytics, leaderboard, A/B test, fetcher, handler, and main runtime logic continues ...
+/* ---------- 8. ANALYTICS / LEADERBOARD ------------------- */
+async function generateOwnerStats(): Promise<string> {
+  const testers = await prisma[config.db.testerTable].count();
+  const totalReplies = await prisma[config.db.interactionTable].count({
+    where: { eventType: "group_reply" },
+  });
+  const clicks = await prisma[config.db.interactionTable].count({
+    where: { eventType: "click" },
+  });
+  const onboard = await prisma[config.db.interactionTable].count({
+    where: { eventType: "onboarding" },
+  });
+  const sourceStats = await prisma[config.db.interactionTable].groupBy({
+    by: ["source"],
+    _count: { source: true },
+    where: { source: { not: null } },
+  });
+  const conversionRate = totalReplies ? ((onboard / totalReplies) * 100).toFixed(2) : "0.00";
+  const ctr = totalReplies ? ((clicks / totalReplies) * 100).toFixed(2) : "0.00";
 
+  let msg = "📊 **GasGuardian Stats**\n\n";
+  msg += `Beta Testers: ${testers}/${config.reply.testingLimit}\n`;
+  msg += `Group Replies: ${totalReplies}\n`;
+  msg += `Link Clicks: ${clicks}\n`;
+  msg += `Onboarded Users: ${onboard}\n\n`;
+  msg += `CTR: ${ctr}%\nConversion Rate: ${conversionRate}%\n\n`;
+  msg += "**Data Sources:**\n";
+  for (const s of sourceStats) msg += `${s.source}: ${s._count.source}\n`;
+  return msg;
+}
+
+async function generateReferralLeaderboard(): Promise<string> {
+  const referrers = await prisma[config.db.referralTable].groupBy({
+    by: ["referrerId"],
+    _count: { referredId: true },
+    orderBy: { _count: { referredId: "desc" } },
+    take: 10,
+  });
+  let board = "🏆 **Beta Tester Leaderboard**\n\n";
+  if (!referrers.length) return board + "No referrals yet.";
+  for (let i = 0; i < referrers.length; i++) {
+    const r = referrers[i];
+    const tester = await prisma[config.db.testerTable].findUnique({
+      where: { tgUserId: r.referrerId },
+    });
+    const name = tester ? `User ${tester.tgUserId}` : "Unknown User";
+    board += `${i + 1}. ${name}: ${r._count.referredId} invites\n`;
+  }
+  return board;
+}
+
+async function getCTAVariant(uid: number) {
+  return config.recruitment.ctaVariants[uid % config.recruitment.ctaVariants.length];
+}
+async function logABTest(uid: number, idx: number, type: string) {
+  await prisma[config.db.abTestTable].create({
+    data: { userId: uid, variantIndex: idx, eventType: type, timestamp: new Date() },
+  });
+}
 async function analyzeABTestResults() {
   const res = [];
   for (let i = 0; i < config.recruitment.ctaVariants.length; i++) {
@@ -287,6 +450,242 @@ async function analyzeABTestResults() {
     });
   }
   console.log("A/B Test Results:", res);
+}
+
+/* ---------- 10. GPT ANALYSIS ----------------------------- */
+async function analyzeMessage(text: string): Promise<AnalyzedMessage | null> {
+  try {
+    const rsp = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Analyze this Telegram message for a crypto bot. Return JSON with: " +
+            "isEnglish, sentiment (-1..1), intent (gas_complaint | token_inquiry | defi_question | nft_discussion | general_crypto | off_topic)," +
+            "entities.chains, entities.tokens, entities.protocols, keywords.",
+        },
+        { role: "user", content: text },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.2,
+    });
+    return JSON.parse(rsp.choices[0].message.content!) as AnalyzedMessage;
+  } catch (e) {
+    console.error("Analyze error:", e);
+    return null;
+  }
+}
+
+/* ---------- 11. BITLY LINK GEN --------------------------- */
+async function generateBitlyLink(uid: number, tid: string) {
+  try {
+    const longUrl = `https://gasguardian.app/invite?uid=${uid}&tid=${tid}`;
+    const rsp = await axios.post(
+      "https://api-ssl.bitly.com/v4/shorten",
+      { long_url: longUrl, domain: "bit.ly" },
+      {
+        headers: {
+          Authorization: `Bearer ${config.api.bitlyToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return rsp.data.link;
+  } catch (e) {
+    console.error("Bitly error:", e);
+    return `https://gasguardian.app/i/${tid}`;
+  }
+}
+
+/* ---------- 12. INTERACTION LOGGER ----------------------- */
+async function logInteraction(data: {
+  userId: number;
+  groupId?: number;
+  messageId: number;
+  eventType: "group_reply" | "dm_reply" | "click" | "onboarding" | "impression";
+  trackingId: string;
+  source?: DataSourceType;
+  variantIndex?: number;
+  meta?: Record<string, any>;
+}) {
+  await prisma[config.db.interactionTable].create({
+    data: { ...data, timestamp: new Date() },
+  });
+}
+
+/* ---------- 13. BETA TESTER REGISTRY --------------------- */
+async function canJoinBeta() {
+  const count = await prisma[config.db.testerTable].count();
+  return count < config.reply.testingLimit;
+}
+async function registerBetaTester(uid: number, email: string, referrerId?: number) {
+  await prisma[config.db.testerTable].create({
+    data: { tgUserId: uid, email, referrerId, joinedAt: new Date() },
+  });
+  if (referrerId)
+    await prisma[config.db.referralTable].create({
+      data: { referrerId, referredId: uid, timestamp: new Date() },
+    });
+}
+/* ---------- 14. DATA FETCHERS ---------------------------- */
+// Fetchers for gas, trending tokens, news, etc. (pseudo-code, replace with your implementations)
+async function fetchGasPrices(): Promise<DataInsight[]> {
+  // Example: Call Blocknative or another API
+  // return [{ text: "ETH gas 12 gwei", source: DataSourceType.BLOCKNATIVE, relevanceScore: 1, timestamp: new Date() }];
+  return [];
+}
+async function fetchTrendingTokens(): Promise<DataInsight[]> {
+  // Example: Return trending tokens from Coingecko
+  return [];
+}
+async function fetchNews(): Promise<DataInsight[]> {
+  // Example: Return news from CryptoPanic
+  return [];
+}
+async function fetchFundingRates(): Promise<DataInsight[]> {
+  // Example: Return funding rates from Coinglass
+  return [];
+}
+async function fetchTrendingDapps(): Promise<DataInsight[]> {
+  // Example: Return trending dapps from DappRadar
+  return [];
+}
+async function collectRelevantInsights(msg: AnalyzedMessage): Promise<DataInsight[]> {
+  // Call all fetchers, filter/sort based on msg intent & entities
+  let insights: DataInsight[] = [];
+  insights = insights.concat(await fetchGasPrices());
+  insights = insights.concat(await fetchTrendingTokens());
+  insights = insights.concat(await fetchNews());
+  insights = insights.concat(await fetchFundingRates());
+  insights = insights.concat(await fetchTrendingDapps());
+  // Sort and filter as needed
+  return insights.sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, 3);
+}
+
+/* ---------- 15. REPLY GENERATOR -------------------------- */
+async function generateReply(
+  e: NewMessageEvent,
+  analyzed: AnalyzedMessage,
+  insights: DataInsight[],
+  group: boolean,
+  trackingId: string,
+  variantIndex?: number
+): Promise<string> {
+  let reply = "";
+  // Example logic: choose reply based on intent, add insights, keep under maxLength
+  if (analyzed.intent === MessageIntentType.GAS_COMPLAINT) {
+    reply = "Gas high? Try these tips:";
+  } else if (analyzed.intent === MessageIntentType.TOKEN_INQUIRY) {
+    reply = "Looking up token info...";
+  } else if (analyzed.intent === MessageIntentType.DEFI_QUESTION) {
+    reply = "DeFi question? Here are the latest stats:";
+  } else if (analyzed.intent === MessageIntentType.NFT_DISCUSSION) {
+    reply = "NFTs are hot! Trends:";
+  } else if (analyzed.intent === MessageIntentType.GENERAL_CRYPTO) {
+    reply = "Crypto update:";
+  } else {
+    reply = "I'm GasGuardian, your crypto gas assistant.";
+  }
+  for (const i of insights) {
+    if (reply.length + 2 + i.text.length < config.reply.maxLength)
+      reply += "\n• " + i.text;
+  }
+  if (group && typeof variantIndex === "number") {
+    reply += `\n\n${config.recruitment.ctaVariants[variantIndex]}`;
+  }
+  return reply.trim().slice(0, config.reply.maxLength);
+}
+
+/* ---------- 16. GROUP & DM HANDLERS ---------------------- */
+async function handleGroupMessage(e: NewMessageEvent) {
+  const msg = e.message;
+  const chatId = Number(msg.peerId?.chatId ?? msg.peerId?.channelId ?? 0);
+  if (!(await canReplyInGroup(chatId))) return;
+  const analyzed = await analyzeMessage(msg.message);
+  if (!analyzed || !analyzed.isEnglish || analyzed.sentiment < config.reply.sentimentThreshold) return;
+  const insights = await collectRelevantInsights(analyzed);
+  const trackingId = generateTrackingId();
+  const variantIndex = chatId % config.recruitment.ctaVariants.length;
+  const reply = await generateReply(e, analyzed, insights, true, trackingId, variantIndex);
+  await markReplyInGroup(chatId);
+  await logInteraction({
+    userId: Number(msg.senderId),
+    groupId: chatId,
+    messageId: msg.id,
+    eventType: "group_reply",
+    trackingId,
+    source: DataSourceType.GPT,
+    variantIndex,
+    meta: { analyzed, insights },
+  });
+  await e.reply({ message: reply });
+  await logABTest(Number(msg.senderId), variantIndex, "impression");
+}
+
+async function handleDirectMessage(e: NewMessageEvent) {
+  const msg = e.message;
+  const uid = Number(msg.senderId);
+  if (!(await canReplyInDM(uid))) return;
+  // Owner commands
+  if (uid === config.telegram.ownerChat) {
+    if (/\/discover_now/i.test(msg.message)) {
+      await discoverGroups(client);
+      await e.reply({ message: "Discovery triggered." });
+      return;
+    }
+    if (/\/stats/i.test(msg.message)) {
+      const stats = await generateOwnerStats();
+      await e.reply({ message: stats });
+      return;
+    }
+    if (/\/leaderboard/i.test(msg.message)) {
+      const board = await generateReferralLeaderboard();
+      await e.reply({ message: board });
+      return;
+    }
+    // ...add more owner commands as needed...
+  }
+  // Beta onboarding
+  if (/\/test/i.test(msg.message)) {
+    if (!(await canJoinBeta())) {
+      await e.reply({ message: "Sorry, beta slots are full." });
+      return;
+    }
+    await e.reply({ message: config.recruitment.betaInstructions });
+    // Wait for email (next message)
+    const filter = (ev: NewMessageEvent) =>
+      ev.message.senderId === msg.senderId && /\S+@\S+\.\S+/.test(ev.message.message);
+    const next = await client.waitForEvent(NewMessage, filter, 60_000);
+    if (next) {
+      await registerBetaTester(uid, next.message.message.trim());
+      await e.reply({ message: config.recruitment.confirmationMessage });
+      await logInteraction({
+        userId: uid,
+        messageId: next.message.id,
+        eventType: "onboarding",
+        trackingId: generateTrackingId(),
+        source: DataSourceType.GPT,
+      });
+    }
+    return;
+  }
+  // General DM: analyze, reply, record
+  const analyzed = await analyzeMessage(msg.message);
+  if (!analyzed || !analyzed.isEnglish) return;
+  const insights = await collectRelevantInsights(analyzed);
+  const trackingId = generateTrackingId();
+  const reply = await generateReply(e, analyzed, insights, false, trackingId);
+  await markReplyInDM(uid);
+  await logInteraction({
+    userId: uid,
+    messageId: msg.id,
+    eventType: "dm_reply",
+    trackingId,
+    source: DataSourceType.GPT,
+    meta: { analyzed, insights },
+  });
+  await e.reply({ message: reply });
 }
 
 /* ---------- 21. SCHEDULE JOBS ---------------------------- */
