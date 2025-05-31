@@ -331,7 +331,6 @@ async function main() {
     phoneCode: async () => "",
     onError: (err) => console.error(err),
   });
-  await client.setDC(2, "149.154.167.50", 443);
   // ... scheduled jobs setup, group join, audit, etc, from your prior logic
 
   // NEW: Message handler for all group/user DMs
