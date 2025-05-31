@@ -116,7 +116,7 @@ const config = {
     blacklistedWords: ["scam", "porn", "betting", "gambling"],
   },
   schedules: {
-    discoveryTime: "0 */12 * * *",
+    discoveryTime: "*/1 * * * *", // -- changed to every 1 minute for auto discovery
     analyticsTime: "0 0 * * *",
     leaderboardTime: "0 12 * * 1",
   },
