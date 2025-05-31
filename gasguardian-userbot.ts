@@ -188,6 +188,12 @@ interface DiscoveredGroup {
 
 /* ---------- 6. UTILITIES --------------------------------- */
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const toBigInt = (v: any): bigint => {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "number") return BigInt(v);
+  if (typeof v === "string") return BigInt(v);
+  return BigInt(v.toString());
+};
 async function canReplyInGroup(chatId: number) {
   const key = `ratelimit:group:${chatId}`;
   const last = await redis.get(key);
@@ -235,7 +241,7 @@ async function discoverGroups(client: TelegramClient) {
       );
       for (const chat of result.chats) {
         if (!("title" in chat)) continue;
-        const chatId = chat.id;
+        const chatIdBig = toBigInt(chat.id);
         const title = (chat as any).title as string;
         const username = (chat as any).username as string | undefined;
         const isChannel = !!(chat as any).broadcast;
@@ -247,10 +253,10 @@ async function discoverGroups(client: TelegramClient) {
           continue;
 
         await prisma[config.db.discoveredGroupTable].upsert({
-          where: { id: chatId },
+          where: { id: chatIdBig },
           update: { lastCheckedAt: new Date(), title, username, memberCount },
           create: {
-            id: chatId,
+            id: chatIdBig,
             title,
             username,
             memberCount,
@@ -262,7 +268,7 @@ async function discoverGroups(client: TelegramClient) {
           },
         });
         await prisma[config.db.discoveryLogTable].create({
-          data: { groupId: chatId, title, keyword: kw, timestamp: new Date(), memberCount },
+          data: { groupId: chatIdBig, title, keyword: kw, timestamp: new Date(), memberCount },
         });
         total++;
       }
@@ -315,8 +321,8 @@ async function handleOwnerCommands(
     return true;
   }
   if (text.startsWith("/monitor ")) {
-    const gid = parseInt(text.split(" ")[1]);
-    if (isNaN(gid)) {
+    const gid = toBigInt(text.split(" ")[1]);
+    if (isNaN(Number(gid))) {
       await client.sendMessage(uid, { message: "Invalid group ID" });
       return true;
     }
