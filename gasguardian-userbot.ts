@@ -126,10 +126,10 @@ const config = {
 };
 
 /* ---------- 5. CHAINS, ENUMS, TYPES ---------------------- */
-// ... (unchanged definitions, as in your code) ...
+// ... (unchanged) ...
 
 /* ---------- 6. UTILITIES --------------------------------- */
-// ... (unchanged utility functions, as in your code) ...
+// ... (unchanged) ...
 
 /* ---------- 7. DISCOVERY & OWNER COMMANDS ---------------- */
 async function discoverGroups(client: TelegramClient) {
@@ -264,6 +264,30 @@ async function sendDiscoveryReport(client: TelegramClient) {
 
 /* ---------- 8. ANALYTICS / LEADERBOARD ------------------- */
 // ... (all your analytics, A/B test, fetchers, handlers, and logic remain unchanged) ...
+
+async function analyzeABTestResults() {
+  const res = [];
+  for (let i = 0; i < config.recruitment.ctaVariants.length; i++) {
+    const impressions = await prisma[config.db.abTestTable].count({
+      where: { variantIndex: i, eventType: "impression" },
+    });
+    const clicks = await prisma[config.db.abTestTable].count({
+      where: { variantIndex: i, eventType: "click" },
+    });
+    const conversions = await prisma[config.db.abTestTable].count({
+      where: { variantIndex: i, eventType: "conversion" },
+    });
+    res.push({
+      variant: config.recruitment.ctaVariants[i],
+      impressions,
+      clicks,
+      conversions,
+      ctr: impressions ? (clicks / impressions) * 100 : 0,
+      conversionRate: clicks ? (conversions / clicks) * 100 : 0,
+    });
+  }
+  console.log("A/B Test Results:", res);
+}
 
 /* ---------- 21. SCHEDULE JOBS ---------------------------- */
 function setupScheduledJobs(client: TelegramClient) {
