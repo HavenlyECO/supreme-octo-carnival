@@ -106,7 +106,7 @@ const config = {
     autoJoinLimit: 2,
   },
   schedules: {
-    discoveryTime: "*/1 * * * *",
+    discoveryTime: "*/5 * * * *", // <--- EVERY 5 MINUTES
     joinTime: "10,40 * * * *",
     analyticsTime: "0 0 * * *",
     leaderboardTime: "0 12 * * 1",
@@ -234,7 +234,7 @@ async function discoverGroups(client: TelegramClient) {
         });
         await prisma.discoveryLog.create({ data: { groupId: chatIdBig, title, keyword: kw, timestamp: new Date(), memberCount } });
       }
-      await sleep(2e3);
+      await sleep(60_000); // --- Sleep 1 minute between each keyword ---
     } catch (e) { }
   }
 }
