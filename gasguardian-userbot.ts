@@ -1,3 +1,6 @@
+// === LOAD ENVIRONMENT VARIABLES ASAP ===
+import 'dotenv/config'; // <-- This line ensures .env variables are loaded before anything else!
+
 /**
  * GasGuardian - Advanced Multi-Chain Crypto Assistant & Beta Recruitment Userbot
  * 
@@ -9,8 +12,8 @@
  * - A/B testing and analytics system for optimization
  * - Owner dashboard and comprehensive data reporting
  * 
- * Version: 2.0.0
- * Last updated: 2025-05-30
+ * Version: 2.0.1
+ * Last updated: 2025-05-31
  */
 
 import { TelegramClient } from "telegram";
