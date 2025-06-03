@@ -7,8 +7,10 @@
 // Updated: 06/05/2025 (using gpt-4o)
 
 import * as path from "path";
+import { fileURLToPath } from "url";
 import { config as dotenvConfig } from "dotenv";
-dotenvConfig({ path: path.resolve(process.cwd(), ".env") });
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenvConfig({ path: path.resolve(__dirname, ".env") });
 
 import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
