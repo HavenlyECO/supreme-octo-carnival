@@ -315,18 +315,18 @@ async function testSendAndValidate(inputChan: Api.InputChannel): Promise<boolean
 }
 
 /**
- * Given a username (e.g. "eth_gas_tracker") or numeric channel ID,
+ * Given a username (e.g. "eth_gas_tracker") or a numeric channel ID string,
  * return an Api.InputChannel (with accessHash) so we can post or leave.
  */
 async function getInputChannel(
-  usernameOrId: string,
-  numericId: number
+  usernameOrId: string
 ): Promise<Api.InputChannel | null> {
   try {
     let entity: any;
     if (/^[0-9]+$/.test(usernameOrId)) {
-      // It's numeric: try by ID
-      entity = await client.getEntity(numericId);
+      // It's numeric: resolve by ID
+      const numeric = Number(usernameOrId);
+      entity = await client.getEntity(numeric);
     } else {
       // It's a username string
       const handle = usernameOrId.startsWith("@") ? usernameOrId : "@" + usernameOrId;
@@ -753,7 +753,7 @@ async function processCandidateQueue() {
     const uname = await redis?.lpop(config.discovery.candidateQueueKey);
     if (!uname) break;
 
-    const inputChan = await getInputChannel(uname, 0);
+    const inputChan = await getInputChannel(uname);
     if (!inputChan) {
       console.warn(`[PROCESS] Could not resolve InputChannel for "${uname}", skipping`);
       await client.sendMessage("me", {
