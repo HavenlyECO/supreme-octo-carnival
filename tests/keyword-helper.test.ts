@@ -54,3 +54,11 @@ test('refreshes after refresh window', async () => {
   expect(mockedNews).toHaveBeenCalledTimes(2);
   expect(mockedDappRadar).toHaveBeenCalledTimes(2);
 });
+
+test('returns empty array when CryptoPanic fetch fails', async () => {
+  mockedNews.mockRejectedValue(new Error('403'));
+  const res = await getDynamicKeywords();
+  expect(res).toEqual([]);
+  expect(mockedNews).toHaveBeenCalledTimes(1);
+  expect(mockedDappRadar).toHaveBeenCalledTimes(1);
+});

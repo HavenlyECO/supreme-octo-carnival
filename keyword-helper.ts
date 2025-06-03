@@ -18,10 +18,7 @@ export async function getDynamicKeywords(): Promise<string[]> {
   try {
     const [newsData, dappData] = await Promise.all([
       fetchCryptoPanicNews(),
-      fetchDappRadarTop().catch((err) => {
-        console.error('[getDynamicKeywords] Failed to fetch DappRadar:', err.message || err);
-        return null;
-      }),
+      fetchDappRadarTop(),
     ]);
 
     const set = new Set<string>();
