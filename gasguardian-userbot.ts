@@ -513,7 +513,13 @@ async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
   const dynamic = await getDynamicKeywords();
   const keywords = Array.from(new Set([...RECRUITMENT_KEYWORDS, ...dynamic]));
 
+  console.log(`[SCRAPE] Searching keywords: ${keywords.join(', ')}`);
+  await client.sendMessage("me", {
+    message: `[Intel][Scrape] Searching keywords: ${keywords.join(', ')}`,
+  });
+
   for (const kw of keywords) {
+    console.log(`[SCRAPE] Querying TGStat & Telegram for "${kw}"`);
     const [tgstat, telegram] = await Promise.all([
       searchTGStat(kw),
       searchTelegram(client, kw),
@@ -561,6 +567,10 @@ async function scrapeAndEnqueueCandidates() {
       for (const bad of config.discovery.blacklist) {
         if (lower.includes(bad)) {
           skip = true;
+          console.log(`[SCRAPE] Skipping ${uname} due to blacklist word "${bad}"`);
+          await client.sendMessage("me", {
+            message: `[Intel][Scrape] ${uname} skipped (blacklist word "${bad}")`,
+          });
           break;
         }
       }
@@ -568,13 +578,24 @@ async function scrapeAndEnqueueCandidates() {
 
       // Ensure channel meets basic activity/membership requirements
       const healthy = await channelIsActiveAndLarge(uname);
-      if (!healthy) continue;
+      if (!healthy) {
+        console.log(`[SCRAPE] ${uname} failed activity/membership check`);
+        await client.sendMessage("me", {
+          message: `[Intel][Scrape] ${uname} skipped (inactive or too small)`,
+        });
+        continue;
+      }
 
       // Only enqueue if not already in Redis queue
       const queueContents = await redis?.lrange(config.discovery.candidateQueueKey, 0, -1);
       if (queueContents && !queueContents.includes(uname)) {
         await redis!.rpush(config.discovery.candidateQueueKey, uname);
         added.push(uname);
+      } else if (queueContents && queueContents.includes(uname)) {
+        console.log(`[SCRAPE] ${uname} already queued`);
+        await client.sendMessage("me", {
+          message: `[Intel][Scrape] ${uname} already in queue`,
+        });
       }
       if (added.length >= config.discovery.maxScrapePerRun) break;
     }
@@ -618,6 +639,10 @@ async function processCandidateQueue() {
     // Fetch candidate from retry set or main queue
     const uname = await dequeueCandidate();
     if (!uname) break;
+    console.log(`[PROCESS] Processing candidate ${uname}`);
+    await client.sendMessage("me", {
+      message: `[Intel][Process] Processing candidate ${uname}`,
+    });
     if (redis) {
       await redis.sadd('processed_channels', uname);
     }
@@ -646,12 +671,19 @@ async function processCandidateQueue() {
     // Skip if manually left
     if (await hasLeftGroup(channelIdNum)) {
       console.log(`[PROCESS] Skipping ${uname} — manually left earlier`);
+      await client.sendMessage("me", {
+        message: `[Intel][Process] "${uname}" skipped (manually left).`,
+      });
       await clearCandidateFailures(uname);
       continue;
     }
 
     // Attempt to join
     try {
+      console.log(`[PROCESS] Attempting to join ${uname}`);
+      await client.sendMessage("me", {
+        message: `[Intel][Process] Attempting to join ${uname}`,
+      });
       await client.invoke(new Api.channels.JoinChannel({ channel: uname }));
       recordJoinGroup(channelIdNum);
       if (redis) {
