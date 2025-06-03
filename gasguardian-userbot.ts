@@ -14,8 +14,8 @@ import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { NewMessage, NewMessageEvent } from "telegram/events";
 import OpenAI from "openai";
-import axios, { AxiosResponse } from "axios";
-import * as cheerio from "cheerio";
+import { searchTGStat } from "./tgstat-search";
+import { searchTelegram } from "./telegram-search";
 import Redis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import schedule from "node-schedule";
@@ -24,6 +24,7 @@ import {
   containsRelevantKeyword,
   pickMostRelevantMessage,
 } from "./relevance";
+import { RECRUITMENT_KEYWORDS } from "./channel_discovery";
 
 // ----------------------------------------
 // === ENVIRONMENT & CONFIGURATION  ======
@@ -507,130 +508,6 @@ function pickRandomCTA(): string {
 // === SCRAPING PUBLIC DIRECTORIES =======
 // ----------------------------------------
 
-/**
- * Scrape TelegramChannels.me for relevant channel usernames.
- * Returns an array of @usernames found on site that match our keywords.
- * (Now: if we get a 403/404, we immediately return an empty array.)
- */
-async function scrapeTelegramChannelsMe(): Promise<string[]> {
-  const url = "https://telegramchannels.me/search?query=gas";
-  try {
-    const response: AxiosResponse<string> = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-      },
-      timeout: 20000,
-      validateStatus: (status) => status === 200, // reject any non-200 immediately
-    });
-
-    const html = response.data;
-    const $ = cheerio.load(html);
-    const channelUsernames: string[] = [];
-
-    // On telegramchannels.me, channels are listed in .channel-item .title a[href]
-    $(".channel-item .title a").each((_, el) => {
-      const href = $(el).attr("href") || "";
-      // href is like "/channel/ethgasstation"
-      const parts = href.split("/").filter((p) => p);
-      if (parts.length >= 2 && parts[0] === "channel") {
-        const uname = "@" + parts[1];
-        channelUsernames.push(uname);
-      }
-    });
-
-    return channelUsernames;
-  } catch (err: any) {
-    if (err.response && (err.response.status === 403 || err.response.status === 404)) {
-      console.warn(`[SCRAPE] telegramchannels.me returned ${err.response.status}, skipping.`);
-      return [];
-    }
-    console.error("[SCRAPE] Error scraping telegramchannels.me:", err.message || err);
-    return [];
-  }
-}
-
-/**
- * Scrape tlgrm.eu for relevant channel usernames.
- * Returns an array of @usernames found on site that match our keywords.
- * (If we get 403/404, immediately return empty array.)
- */
-async function scrapeTlgrmEu(): Promise<string[]> {
-  const url = "https://tlgrm.eu/tag/gas";
-  try {
-    const response: AxiosResponse<string> = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-      },
-      timeout: 20000,
-      validateStatus: (status) => status === 200,
-    });
-
-    const html = response.data;
-    const $ = cheerio.load(html);
-    const channelUsernames: string[] = [];
-
-    // On tlgrm.eu, channels often in .channel-list .channel a[href]
-    $(".channel-list .channel a").each((_, el) => {
-      const href = $(el).attr("href") || "";
-      const match = href.match(/@[\w\d_]+/);
-      if (match) {
-        channelUsernames.push(match[0]);
-      }
-    });
-
-    return channelUsernames;
-  } catch (err: any) {
-    if (err.response && (err.response.status === 403 || err.response.status === 404)) {
-      console.warn(`[SCRAPE] tlgrm.eu returned ${err.response.status}, skipping.`);
-      return [];
-    }
-    console.error("[SCRAPE] Error scraping tlgrm.eu:", err.message || err);
-    return [];
-  }
-}
-
-/**
- * Scrape telegramic.org for relevant channel usernames.
- * Returns an array of @usernames found on site that match our keywords.
- * (If 403/404, return empty array.)
- */
-async function scrapeTelegramicOrg(): Promise<string[]> {
-  const url = "https://telegramic.org/tag/gas/";
-  try {
-    const response: AxiosResponse<string> = await axios.get(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-      },
-      timeout: 20000,
-      validateStatus: (status) => status === 200,
-    });
-
-    const html = response.data;
-    const $ = cheerio.load(html);
-    const channelUsernames: string[] = [];
-
-    // On telegramic.org, channels are in .tg-list .tg-list-item a[href]
-    $(".tg-list .tg-list-item a").each((_, el) => {
-      const href = $(el).attr("href") || "";
-      const match = href.match(/@[\w\d_]+/);
-      if (match) {
-        channelUsernames.push(match[0]);
-      }
-    });
-
-    return channelUsernames;
-  } catch (err: any) {
-    if (err.response && (err.response.status === 403 || err.response.status === 404)) {
-      console.warn(`[SCRAPE] telegramic.org returned ${err.response.status}, skipping.`);
-      return [];
-    }
-    console.error("[SCRAPE] Error scraping telegramic.org:", err.message || err);
-    return [];
-  }
-}
 
 /**
  * Use @TGStat_Bot to filter out low-engagement channels.
@@ -690,25 +567,24 @@ async function filterByTGStatBot(username: string): Promise<boolean> {
   }
 }
 
+
 /**
- * Scrape public directories + TGStatBot to build a candidate list.
- * Returns a deduplicated array of @usernames to consider joining.
+ * Search TGStat and Telegram for recruitment keywords, then filter via TGStatBot.
  */
 async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
   const usernamesSet = new Set<string>();
 
-  // 1) Scrape HTML directories
-  const [chanMe, tlgrm, telemic] = await Promise.all([
-    scrapeTelegramChannelsMe(),
-    scrapeTlgrmEu(),
-    scrapeTelegramicOrg(),
-  ]);
+  for (const kw of RECRUITMENT_KEYWORDS) {
+    const [tgstat, telegram] = await Promise.all([
+      searchTGStat(kw),
+      searchTelegram(client, kw),
+    ]);
+    [...tgstat, ...telegram].forEach((u) => {
+      if (u.startsWith("@")) usernamesSet.add(u);
+    });
+    await sleep(1000, 2000);
+  }
 
-  [...chanMe, ...tlgrm, ...telemic].forEach((u) => {
-    if (u.startsWith("@")) usernamesSet.add(u);
-  });
-
-  // 2) Filter each candidate via TGStatBot
   const finalCandidates: string[] = [];
   for (const uname of usernamesSet) {
     if (finalCandidates.length >= maxCandidates) break;
@@ -1330,10 +1206,12 @@ async function main() {
   console.log("[GasGuardian] Bot started and listening for messages.");
 }
 
-main().catch((err) => {
-  console.error("[FATAL ERROR]", err);
-  process.exit(1);
-});
+if (process.env.NODE_ENV !== "test") {
+  main().catch((err) => {
+    console.error("[FATAL ERROR]", err);
+    process.exit(1);
+  });
+}
 
 // ----------------------------------------
 // === BOOT LOGGING ======================
