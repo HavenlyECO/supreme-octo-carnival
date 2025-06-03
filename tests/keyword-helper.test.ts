@@ -1,17 +1,25 @@
 import { getDynamicKeywords, __resetDynamicCache } from '../keyword-helper';
-import { fetchCryptoPanicNews } from '../external-data';
+import { fetchCryptoPanicNews, fetchDappRadarTop } from '../external-data';
 
 jest.mock('../external-data');
 
-const mockedFetch = fetchCryptoPanicNews as jest.MockedFunction<typeof fetchCryptoPanicNews>;
+const mockedNews = fetchCryptoPanicNews as jest.MockedFunction<typeof fetchCryptoPanicNews>;
+const mockedDappRadar = fetchDappRadarTop as jest.MockedFunction<typeof fetchDappRadarTop>;
 
 beforeEach(() => {
   __resetDynamicCache();
   jest.spyOn(Date, 'now').mockReturnValue(0);
-  mockedFetch.mockResolvedValue({
+  mockedNews.mockResolvedValue({
     results: [
       { currencies: [{ code: 'ETH' }, { code: 'BTC' }] },
       { currencies: [{ code: 'ETH' }, { code: 'MATIC' }] },
+    ],
+  } as any);
+  mockedDappRadar.mockResolvedValue({
+    dapps: [
+      { symbol: 'ETH' },
+      { symbol: 'SOL' },
+      { token: { symbol: 'AVAX' } },
     ],
   } as any);
 });
@@ -21,24 +29,28 @@ afterEach(() => {
   jest.resetAllMocks();
 });
 
-test('collects unique currency codes from news', async () => {
+test('collects unique currency codes from sources', async () => {
   const res = await getDynamicKeywords();
-  expect(res).toEqual(['eth', 'btc', 'matic']);
+  expect(res).toEqual(['eth', 'btc', 'matic', 'sol', 'avax']);
 });
 
 test('uses cached keywords within refresh window', async () => {
   await getDynamicKeywords();
-  mockedFetch.mockResolvedValue({ results: [{ currencies: [{ code: 'SOL' }] }] } as any);
+  mockedNews.mockResolvedValue({ results: [{ currencies: [{ code: 'XRP' }] }] } as any);
+  mockedDappRadar.mockResolvedValue({ dapps: [{ symbol: 'BNB' }] } as any);
   const res = await getDynamicKeywords();
-  expect(res).toEqual(['eth', 'btc', 'matic']);
-  expect(mockedFetch).toHaveBeenCalledTimes(1);
+  expect(res).toEqual(['eth', 'btc', 'matic', 'sol', 'avax']);
+  expect(mockedNews).toHaveBeenCalledTimes(1);
+  expect(mockedDappRadar).toHaveBeenCalledTimes(1);
 });
 
 test('refreshes after refresh window', async () => {
   await getDynamicKeywords();
-  mockedFetch.mockResolvedValue({ results: [{ currencies: [{ code: 'SOL' }] }] } as any);
+  mockedNews.mockResolvedValue({ results: [{ currencies: [{ code: 'XRP' }] }] } as any);
+  mockedDappRadar.mockResolvedValue({ dapps: [{ symbol: 'BNB' }] } as any);
   (Date.now as jest.Mock).mockReturnValue(1000 * 60 * 61);
   const res = await getDynamicKeywords();
-  expect(res).toEqual(['sol']);
-  expect(mockedFetch).toHaveBeenCalledTimes(2);
+  expect(res).toEqual(['xrp', 'bnb']);
+  expect(mockedNews).toHaveBeenCalledTimes(2);
+  expect(mockedDappRadar).toHaveBeenCalledTimes(2);
 });
