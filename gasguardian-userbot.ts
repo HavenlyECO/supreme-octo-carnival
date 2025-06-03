@@ -31,21 +31,12 @@ import {
 } from "./relevance";
 import { RECRUITMENT_KEYWORDS } from "./channel_discovery";
 import { getDynamicKeywords } from "./keyword-helper";
+import { getEnv } from "./env-helper";
 
 // ----------------------------------------
 // === ENVIRONMENT & CONFIGURATION  ======
 // ----------------------------------------
 
-function getEnv(name: string, required = true): string {
-  const realKey = Object.keys(process.env).find((k) =>
-    k.trim().replace(/^\uFEFF/, "") === name
-  );
-  const value = realKey ? process.env[realKey] : undefined;
-  if (required && (!value || value.trim() === "")) {
-    throw new Error(`[GasGuardian] Missing required env var → ${name}`);
-  }
-  return value ? value.trim() : "";
-}
 
 const env = {
   TG_API_ID: Number(getEnv("TG_API_ID")),
