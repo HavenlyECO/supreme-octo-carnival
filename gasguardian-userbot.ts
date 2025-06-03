@@ -17,7 +17,7 @@ import { StringSession } from "telegram/sessions";
 import { NewMessage, NewMessageEvent } from "telegram/events";
 import OpenAI from "openai";
 import axios from "axios";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 import Redis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import schedule from "node-schedule";
@@ -365,7 +365,7 @@ async function fetchRecentMessages(
         maxId: 0,
         minId: 0,
         addOffset: 0,
-        hash: 0,
+        hash: Api.BigInteger.fromValue(0),
       })
     );
     const msgs = (history as any).messages as Api.Message[];
@@ -587,14 +587,19 @@ async function filterByTGStatBot(username: string): Promise<boolean> {
     const entity = await client.getEntity(botPeer);
     const updates = (await client.invoke(
       new Api.messages.GetHistory({
-        peer: new Api.InputPeerUser({ userId: entity.id, accessHash: entity.accessHash! }),
+        peer:
+          entity instanceof Api.User && entity.accessHash !== undefined
+            ? new Api.InputPeerUser({ userId: entity.id, accessHash: entity.accessHash })
+            : (() => {
+                throw new Error("Entity is not a User or missing accessHash");
+              })(),
         limit: 5,
         offsetDate: 0,
         offsetId: sentMsg.id,
         maxId: 0,
         minId: 0,
         addOffset: 0,
-        hash: 0,
+        hash: Api.BigInteger.fromValue(0),
       })
     )) as any;
 
@@ -619,50 +624,7 @@ async function filterByTGStatBot(username: string): Promise<boolean> {
 }
 
 /**
- * Use @findmeabot to discover competitors or partners for potential cross-promotion.
- * Returns an array of @usernames found in response.
- */
-async function discoverCompetitorsViaFindMeabot(keyword: string): Promise<string[]> {
-  try {
-    const botPeer = "@findmeabot";
-    const sentMsg = await client.sendMessage(botPeer, { message: keyword });
-    await sleep(3000, 5000);
-
-    const entity = await client.getEntity(botPeer);
-    const updates = (await client.invoke(
-      new Api.messages.GetHistory({
-        peer: new Api.InputPeerUser({ userId: entity.id, accessHash: entity.accessHash! }),
-        limit: 5,
-        offsetDate: 0,
-        offsetId: sentMsg.id,
-        maxId: 0,
-        minId: 0,
-        addOffset: 0,
-        hash: 0,
-      })
-    )) as any;
-
-    const messages: Api.Message[] = updates.messages || [];
-    const foundUsernames: string[] = [];
-    for (const m of messages) {
-      const text = (m as any).message as string;
-      if (!text) continue;
-      const matches = text.match(/@[\w\d_]+/g);
-      if (matches) {
-        matches.forEach((u) => {
-          if (!foundUsernames.includes(u)) foundUsernames.push(u);
-        });
-      }
-    }
-    return foundUsernames;
-  } catch (err) {
-    console.error(`[FINDMEABOT] Error discovering with "${keyword}":`, (err as any).message || err);
-    return [];
-  }
-}
-
-/**
- * Scrape public directories and bot-assisted sources to build a candidate list.
+ * Scrape public directories to build a candidate list.
  * Returns a deduplicated array of @usernames to consider joining.
  */
 async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
@@ -679,18 +641,7 @@ async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
     if (u.startsWith("@")) usernamesSet.add(u);
   });
 
-  // 2) Use findmeabot for competitor keywords
-  const competitorKeywords = ["gas tracker", "cheap gas", "экономия газа", "газ трекер"];
-  for (const kw of competitorKeywords) {
-    const found = await discoverCompetitorsViaFindMeabot(kw);
-    found.forEach((u) => {
-      if (u.startsWith("@")) usernamesSet.add(u);
-    });
-    await sleep(1000, 2000);
-    if (usernamesSet.size >= maxCandidates) break;
-  }
-
-  // 3) Filter candidates via TGStatBot
+  // 2) Filter candidates via TGStatBot
   const finalCandidates: string[] = [];
   for (const uname of usernamesSet) {
     if (finalCandidates.length >= maxCandidates) break;
@@ -707,7 +658,7 @@ async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
 // ----------------------------------------
 
 /**
- * 1) Scrape public directories + competitor bots to build up to maxScrapePerRun candidates.
+ * 1) Scrape public directories to build up to maxScrapePerRun candidates.
  * 2) Push new candidates into Redis list `candidatesToJoin`.
  * 3) Log intel to Saved Messages.
  */
@@ -856,7 +807,11 @@ async function processCandidateQueue() {
       }
 
       // Send AI reply
-      const sent = await safeSendMessage(inputChan, aiReply);
+      const inputPeer = new Api.InputPeerChannel({
+        channelId: (inputChan as any).channelId,
+        accessHash: (inputChan as any).accessHash,
+      });
+      const sent = await safeSendMessage(inputPeer, aiReply);
       if (!sent) {
         console.log(`[PROCESS] AI reply send failed → leaving ${uname}`);
         await client.invoke(new Api.channels.LeaveChannel({ channel: inputChan }));
@@ -875,7 +830,6 @@ async function processCandidateQueue() {
       await client.sendMessage("me", {
         message: `[Intel][Process] Joined and posted AI reply in "${uname}".`,
       });
-
     } catch (joinErr: any) {
       const msg = joinErr.errorMessage || joinErr.message || "";
       if (msg.includes("USER_ALREADY_PARTICIPANT")) {
@@ -915,7 +869,7 @@ async function processCandidateQueue() {
  *      code-level improvements with small examples.
  *   3) If zero groups joined or zero conversions, explicitly prompt for “if no groups joined,
  *      here are three example things you could do…”.
- *   4) Check TGStat conversion metrics: did anyone convert (i.e. send `/test`)?
+ *   4) Check TGStat conversion metrics: did anyone convert (i.e. send `/test`)? 
  */
 function scheduleHourlySummary() {
   schedule.scheduleJob("0 * * * *", async () => {
@@ -943,21 +897,21 @@ function scheduleHourlySummary() {
         `- AI-driven replies sent: ${repliesThisHour}`,
         `- Generic CTAs sent: ${ctasThisHour}`,
         `- Successful conversions (users completing /test → Gmail): ${conversionsThisHour}`,
-        "",
+        ``,
         `Review the following key functions of the bot code:`,
         `1. scrapeAndEnqueueCandidates()`,
         `2. processCandidateQueue()`,
         `3. generateAIReply()`,
         `4. handleMessage() (DM funnel, CTA logic)`,
         `5. The new Redis-based queue logic.`,
-        "",
+        ``,
         `Tasks (provide actionable, code-specific suggestions with small code snippets where possible):`,
         `A) Summarize what happened this last hour (based on the metrics).`,
         `B) For each of the above functions, identify any potential inefficiencies or edge cases. Provide a short code snippet or pseudocode illustrating how to improve (e.g., optimize selector, adjust backoff, refine prompt to OpenAI, reduce redundant Redis calls).`,
         `C) If “Channels joined” is zero, propose three specific tasks the bot could run (with code-level pseudocode examples) to increase join rate or refine discovery next hour.`,
         `D) If “Conversions” is zero, propose three specific adjustments to the DM funnel or CTA wording (include updated text snippets) to boost conversion until we get the first /test command.`,
         `E) Suggest any adjustments to scheduling (e.g., adjust scraping frequency, adjust join batch size).`,
-        "",
+        ``,
         `Use model gpt-4o. Write the response in two or three paragraphs, but include small code/pseudocode blocks for each suggestion.`,
       ];
       const prompt = promptLines.join("\n");
@@ -1080,6 +1034,7 @@ async function handleMessage(e: NewMessageEvent) {
   const msg = e.message;
   if (!msg || msg.out || !msg.text) return;
 
+  // Move peerClass, groupId, userId declaration here so both group and DM logic can use them
   const peerClass = msg.peerId?.className;
   let groupId = 0;
   let userId = "";
@@ -1139,7 +1094,8 @@ async function handleMessage(e: NewMessageEvent) {
 
     // 2b) If OpenAI gave a reply (“aiIntent”), we post that reply exactly as is.
     if (aiIntent) {
-      const sent = await safeSendMessage(msg.peerId, aiIntent, msg.id);
+      const inputEntity = await client.getInputEntity(msg.peerId);
+      const sent = await safeSendMessage(inputEntity, aiIntent, msg.id);
       if (sent) {
         await recordGroupReply(groupId);
         if (redis) {
@@ -1157,7 +1113,8 @@ async function handleMessage(e: NewMessageEvent) {
     // 2c) If GPT returned nothing but ctaAllowed = true, send a human‐style CTA.
     if (!aiIntent && ctaAllowed) {
       const replyText = pickRandomCTA();
-      const sent = await safeSendMessage(msg.peerId, replyText, msg.id);
+      const inputEntity = await client.getInputEntity(msg.peerId);
+      const sent = await safeSendMessage(inputEntity, replyText, msg.id);
       if (sent) {
         await recordGroupReply(groupId);
         ctaSentCountHour++;
@@ -1181,6 +1138,7 @@ async function handleMessage(e: NewMessageEvent) {
   if (peerClass === "PeerUser") {
     // 3a) If user replies with Gmail & has a pending reminder
     const gmailPattern = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
+    // userId is already set above for PeerUser
     if (gmailPattern.test(msg.text.trim().toLowerCase())) {
       const pending = redis ? await redis.get(`pendingReminder:${userId}`) : null;
       if (pending) {
