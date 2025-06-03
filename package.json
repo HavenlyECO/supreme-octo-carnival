@@ -3,7 +3,7 @@
   "version": "2.0.2",
   "type": "module",
   "scripts": {
-    "start": "ts-node src/index.ts",
+    "start": "ts-node gasguardian-userbot.ts",
     "build": "tsc",
     "prisma": "prisma"
   },
