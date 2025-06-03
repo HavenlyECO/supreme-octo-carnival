@@ -14,8 +14,11 @@ export async function fetchBlocknativeGas() {
 export async function fetchCryptoPanicNews() {
   const key = getEnv('CRYPTOPANIC_KEY');
   if (!key) throw new Error('CRYPTOPANIC_KEY not set');
-  const url = `https://cryptopanic.com/api/v1/posts/?auth_token=${key}&kind=news`;
-  const resp = await axios.get(url, { timeout: 10000 });
+  const url = 'https://cryptopanic.com/api/v1/posts/';
+  const resp = await axios.get(url, {
+    params: { auth_token: key, kind: 'news', public: true },
+    timeout: 10000,
+  });
   return resp.data;
 }
 
