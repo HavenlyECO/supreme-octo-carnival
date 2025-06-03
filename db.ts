@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 
 let channelSearchReady = false;
 
-async function ensureChannelSearchTable(): Promise<void> {
+export async function ensureChannelSearchTable(): Promise<void> {
   if (channelSearchReady) return;
   try {
     await prisma.$executeRawUnsafe(`

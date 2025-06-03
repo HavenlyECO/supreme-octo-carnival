@@ -17,7 +17,12 @@ import OpenAI from "openai";
 import { searchTGStat } from "./tgstat-search";
 import { searchTelegram } from "./telegram-search";
 import Redis from "ioredis";
-import { prisma, logChannelSearch, channelAlreadySearched } from "./db";
+import {
+  prisma,
+  logChannelSearch,
+  channelAlreadySearched,
+  ensureChannelSearchTable,
+} from "./db";
 import schedule from "node-schedule";
 import {
   RELEVANT_KEYWORDS,
@@ -1185,6 +1190,8 @@ async function main() {
     phoneCode: async () => "",
     onError: (err) => console.error("[TG] Client error:", err),
   });
+
+  await ensureChannelSearchTable();
 
   console.log("[BOT] Client started, registering event handler");
   client.addEventHandler(handleMessage, new NewMessage({}));
