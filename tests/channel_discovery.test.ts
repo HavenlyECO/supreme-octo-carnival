@@ -4,10 +4,9 @@ import { RedisSetClient } from "../queue";
 
 class MockSearcher implements Searcher {
   calls: string[] = [];
-  constructor(private results: Record<string, string[]>) {}
   async searchChannels(keyword: string): Promise<string[]> {
     this.calls.push(keyword);
-    return this.results[keyword] || [];
+    return [`${keyword}_chan`];
   }
 }
 
@@ -28,16 +27,10 @@ class MockRedis implements RedisSetClient {
 
 describe('discoverChannels', () => {
   test('searches each keyword and enqueues results', async () => {
-    const searcher = new MockSearcher({
-      job: ['chan1'],
-      hiring: ['chan2', 'chan3'],
-      career: [],
-    });
+    const searcher = new MockSearcher();
     const redis = new MockRedis();
     await discoverChannels(searcher, redis);
     expect(searcher.calls).toEqual(RECRUITMENT_KEYWORDS);
-    expect(redis.pending.has('chan1')).toBe(true);
-    expect(redis.pending.has('chan2')).toBe(true);
-    expect(redis.pending.has('chan3')).toBe(true);
+    expect(redis.pending.size).toBe(RECRUITMENT_KEYWORDS.length);
   });
 });

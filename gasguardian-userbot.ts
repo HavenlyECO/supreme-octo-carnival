@@ -375,7 +375,7 @@ async function fetchRecentMessages(
         maxId: 0,
         minId: 0,
         addOffset: 0,
-        hash: Api.BigInteger.fromValue(0),
+        hash: BigInt(0),
       })
     );
     const msgs = (history as any).messages as Api.Message[];
@@ -412,7 +412,7 @@ async function channelIsActiveAndLarge(username: string): Promise<boolean> {
         maxId: 0,
         minId: 0,
         addOffset: 0,
-        hash: Api.BigInteger.fromValue(0),
+        hash: BigInt(0),
       })
     )) as any;
     const msgs: Api.Message[] = hist.messages || [];
@@ -540,7 +540,7 @@ async function filterByTGStatBot(username: string): Promise<boolean> {
         maxId: 0,
         minId: 0,
         addOffset: 0,
-        hash: Api.BigInteger.fromValue(0),
+        hash: BigInt(0),
       })
     )) as any;
 
