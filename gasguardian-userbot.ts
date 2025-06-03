@@ -140,6 +140,10 @@ const config = {
     fallbackMaxTries: 3,
     // We’ll store scraped candidates in Redis list "candidatesToJoin"
     candidateQueueKey: "candidatesToJoin",
+    // Retry handling
+    retryQueueKey: "candidateRetrySet",
+    failHashKey: "candidateFailCounts",
+    maxRetryDelay: 3600,
   },
 };
 
@@ -231,6 +235,46 @@ async function recordLeftGroup(groupId: number) {
   if (redis) {
     await redis.sadd(key, groupId.toString());
   }
+}
+
+/** Fetch the next candidate to process, checking the retry set first. */
+async function dequeueCandidate(): Promise<string | null> {
+  if (!redis) return null;
+  const now = Date.now();
+  const due = await redis.zrangebyscore(
+    config.discovery.retryQueueKey,
+    0,
+    now,
+    'LIMIT',
+    0,
+    1
+  );
+  if (due.length > 0) {
+    await redis.zrem(config.discovery.retryQueueKey, due[0]);
+    return due[0];
+  }
+  return await redis.lpop(config.discovery.candidateQueueKey);
+}
+
+/** Schedule a candidate for retry with exponential backoff. */
+async function scheduleCandidateRetry(uname: string, baseDelay = 10) {
+  if (!redis) return;
+  const count = await redis.hincrby(config.discovery.failHashKey, uname, 1);
+  const delay = Math.min(
+    config.discovery.maxRetryDelay,
+    baseDelay * Math.pow(2, count - 1)
+  );
+  await redis.zadd(
+    config.discovery.retryQueueKey,
+    Date.now() + delay * 1000,
+    uname
+  );
+}
+
+/** Clear a candidate's failure count. */
+async function clearCandidateFailures(uname: string) {
+  if (!redis) return;
+  await redis.hdel(config.discovery.failHashKey, uname);
 }
 
 /**
@@ -735,8 +779,8 @@ async function processCandidateQueue() {
 
   let joinedThisRun = 0;
   for (let i = 0; i < config.discovery.maxJoinPerRun; i++) {
-    // Pop one candidate
-    const uname = await redis?.lpop(config.discovery.candidateQueueKey);
+    // Fetch candidate from retry set or main queue
+    const uname = await dequeueCandidate();
     if (!uname) break;
 
     const inputChan = await getInputChannel(uname);
@@ -745,6 +789,7 @@ async function processCandidateQueue() {
       await client.sendMessage("me", {
         message: `[Intel][Process] Candidate "${uname}" resolution failed. Skipped.`,
       });
+      await scheduleCandidateRetry(uname);
       continue;
     }
     const channelIdNum = (inputChan as any).channelId as number;
@@ -755,12 +800,14 @@ async function processCandidateQueue() {
       await client.sendMessage("me", {
         message: `[Intel][Process] "${uname}" skipped (joined recently).`,
       });
+      await clearCandidateFailures(uname);
       continue;
     }
 
     // Skip if manually left
     if (await hasLeftGroup(channelIdNum)) {
       console.log(`[PROCESS] Skipping ${uname} — manually left earlier`);
+      await clearCandidateFailures(uname);
       continue;
     }
 
@@ -786,6 +833,7 @@ async function processCandidateQueue() {
         await client.sendMessage("me", {
           message: `[Intel][Process] Joined "${uname}" but activity <5 msgs → left.`,
         });
+        await clearCandidateFailures(uname);
         continue;
       }
 
@@ -798,6 +846,7 @@ async function processCandidateQueue() {
         await client.sendMessage("me", {
           message: `[Intel][Process] Joined "${uname}" but no relevant discussion → left.`,
         });
+        await clearCandidateFailures(uname);
         continue;
       }
 
@@ -813,6 +862,7 @@ async function processCandidateQueue() {
         await client.sendMessage("me", {
           message: `[Intel][Process] AI reply generation failed for "${uname}". Left.`,
         });
+        await scheduleCandidateRetry(uname);
         continue;
       }
 
@@ -829,6 +879,7 @@ async function processCandidateQueue() {
         await client.sendMessage("me", {
           message: `[Intel][Process] AI reply send failed for "${uname}". Left.`,
         });
+        await scheduleCandidateRetry(uname);
         continue;
       }
 
@@ -840,6 +891,7 @@ async function processCandidateQueue() {
       await client.sendMessage("me", {
         message: `[Intel][Process] Joined and posted AI reply in "${uname}".`,
       });
+      await clearCandidateFailures(uname);
     } catch (joinErr: any) {
       const msg = joinErr.errorMessage || joinErr.message || "";
       if (msg.includes("USER_ALREADY_PARTICIPANT")) {
@@ -851,6 +903,7 @@ async function processCandidateQueue() {
         console.warn(`[PROCESS] Flood wait when joining ${uname}: ${msg}`);
         console.log(`[PROCESS] Sleeping ${waitSeconds + 5}s to avoid rapid retries`);
         await new Promise((res) => setTimeout(res, (waitSeconds + 5) * 1000));
+        await scheduleCandidateRetry(uname, waitSeconds);
         break;
       }
       console.error(`[PROCESS] Error joining ${uname}:`, msg);
@@ -858,6 +911,7 @@ async function processCandidateQueue() {
         message: `[Intel][Process] Error joining "${uname}": ${msg}`,
       });
       await recordLeftGroup(channelIdNum);
+      await scheduleCandidateRetry(uname);
     }
 
     // Human-like delay between attempts
