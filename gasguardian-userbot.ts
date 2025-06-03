@@ -30,6 +30,7 @@ import {
   pickMostRelevantMessage,
 } from "./relevance";
 import { RECRUITMENT_KEYWORDS } from "./channel_discovery";
+import { getDynamicKeywords } from "./keyword-helper";
 
 // ----------------------------------------
 // === ENVIRONMENT & CONFIGURATION  ======
@@ -516,8 +517,10 @@ function pickRandomCTA(): string {
  */
 async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
   const usernamesSet = new Set<string>();
+  const dynamic = await getDynamicKeywords();
+  const keywords = Array.from(new Set([...RECRUITMENT_KEYWORDS, ...dynamic]));
 
-  for (const kw of RECRUITMENT_KEYWORDS) {
+  for (const kw of keywords) {
     const [tgstat, telegram] = await Promise.all([
       searchTGStat(kw),
       searchTelegram(client, kw),
