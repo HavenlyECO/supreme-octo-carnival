@@ -1,4 +1,4 @@
-import { fetchCryptoPanicNews } from './external-data';
+import { fetchCryptoPanicNews, fetchDappRadarTop } from './external-data';
 
 let cachedKeywords: string[] = [];
 let lastFetched = 0;
@@ -16,9 +16,17 @@ export async function getDynamicKeywords(): Promise<string[]> {
   }
 
   try {
-    const data = await fetchCryptoPanicNews();
+    const [newsData, dappData] = await Promise.all([
+      fetchCryptoPanicNews(),
+      fetchDappRadarTop().catch((err) => {
+        console.error('[getDynamicKeywords] Failed to fetch DappRadar:', err.message || err);
+        return null;
+      }),
+    ]);
+
     const set = new Set<string>();
-    for (const item of data?.results ?? []) {
+
+    for (const item of newsData?.results ?? []) {
       const currencies = (item as any).currencies ?? [];
       for (const cur of currencies) {
         if (cur && typeof cur.code === 'string') {
@@ -26,6 +34,15 @@ export async function getDynamicKeywords(): Promise<string[]> {
         }
       }
     }
+
+    const dapps: any[] = (dappData as any)?.dapps ?? (dappData as any)?.results ?? [];
+    for (const dapp of dapps) {
+      const symbol = (dapp && (dapp.symbol || dapp.token?.symbol)) as string | undefined;
+      if (symbol && typeof symbol === 'string') {
+        set.add(symbol.toLowerCase());
+      }
+    }
+
     cachedKeywords = Array.from(set);
     lastFetched = now;
     return cachedKeywords;
