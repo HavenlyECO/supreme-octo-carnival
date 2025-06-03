@@ -4,7 +4,26 @@ export interface Searcher {
 
 import { enqueueChannel, RedisSetClient } from './queue';
 
-export const RECRUITMENT_KEYWORDS = ['job', 'hiring', 'career'];
+export const RECRUITMENT_KEYWORDS = [
+  // English terms
+  'gas fees',
+  'cheap gas',
+  'gas optimization',
+  'defi',
+  'nft',
+  'airdrop',
+  'layer 2',
+  'l2',
+  // Russian equivalents
+  'газовые комиссии',
+  'дешевый газ',
+  'оптимизация газа',
+  'дефи',
+  'нфт',
+  'эйрдроп',
+  'слой 2',
+  'л2',
+];
 
 export async function discoverChannels(
   searcher: Searcher,

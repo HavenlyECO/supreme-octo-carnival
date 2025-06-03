@@ -9,7 +9,7 @@ export async function searchTelegram(
       new Api.contacts.Search({
         q: keyword,
         limit: 50,
-        hash: Api.BigInteger.fromValue(0),
+        hash: BigInt(0),
       })
     )) as any;
     const names: string[] = [];
