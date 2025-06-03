@@ -430,10 +430,9 @@ async function channelIsActiveAndLarge(username: string): Promise<boolean> {
  */
 
 /**
- * Ask OpenAI to generate a concise, context-driven reply to the given `promptText`.
- * It will read the last message(s) and respond *in a way that directly addresses the conversation*—
- * only mentioning GasGuardian if it’s a natural fit. Returns the generated reply (or empty string on failure).
- * Adjusted prompt to match vibe based on message length.
+ * Ask OpenAI to generate a concise, engaging reply to the given `promptText`.
+ * Replies should directly address the discussion and match the vibe of the
+ * original message. A short feedback loop is used to polish the draft.
  */
 async function generateAIReply(
   promptText: string,
@@ -444,22 +443,22 @@ async function generateAIReply(
     let systemPrompt: string;
     if (isRussian) {
       systemPrompt =
-        "Ты бот, который внимательно читает чат и отвечает по теме. Если обсуждают высокие комиссии, дай совет, как их снизить. Не упоминай GasGuardian сразу, только если это действительно поможет. Старайся писать в стиле участника группы.";
+        "Ты контекстно-ориентированный помощник, отвечающий по теме. Если обсуждают высокие комиссии, дай совет, как их снизить. Не упоминай GasGuardian сразу, только если это действительно необходимо. Ответ должен быть дружелюбным и вовлекающим.";
     } else {
       systemPrompt =
-        "You are a context-aware assistant that carefully reads the chat and replies topically. If people are discussing high gas fees, give a genuine tip on how to lower fees. Don’t mention GasGuardian up front—only if it truly fits. Match the tone/length of the original message.";
+        "You are a context-aware assistant that responds directly to the conversation. If high gas fees come up, share a genuine tip to reduce them. Mention GasGuardian only if it fits naturally. Keep replies short, friendly and inviting.";
     }
 
-    // If the user message was very short (<5 words), generate an equally short, friendly reply
+    // Generate a short, engaging reply matching the user's message length
     const userPrompt = isRussian
-      ? `Последнее сообщение: "${promptText}"\nНапиши короткий, дружелюбный ответ, соответствующий длине: не более ${
+      ? `Последнее сообщение: "${promptText}"\nНапиши краткий и увлекательный ответ не более ${
           userMsgLength < 5 ? "5 слов" : "15 слов"
-        }${userMsgLength < 5 ? ", очень неформально" : ""}.`
-      : `Last message: "${promptText}"\nWrite a short, friendly reply matching the length: no more than ${
+        }.`
+      : `Last message: "${promptText}"\nWrite a brief, engaging reply in no more than ${
           userMsgLength < 5 ? "5 words" : "15 words"
-        }${userMsgLength < 5 ? ", keep it super casual" : ""}.`;
+        }, inviting further conversation.`;
 
-    const response = await openai.chat.completions.create({
+    const firstPass = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
@@ -468,8 +467,28 @@ async function generateAIReply(
       max_tokens: userMsgLength < 5 ? 30 : 60,
       temperature: 0.7,
     });
+
+    let reply = firstPass.choices?.[0]?.message?.content?.trim() || "";
+
+    // Feedback loop: polish the reply to make it a bit more inviting
+    if (reply) {
+      const refinePrompt = isRussian
+        ? `Улучшите этот ответ, сделайте его чуть более вовлекающим, сохраняя ту же длину: "${reply}"`
+        : `Improve this reply to be a bit more engaging while staying concise: "${reply}"`;
+      const refined = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: refinePrompt },
+        ],
+        max_tokens: userMsgLength < 5 ? 30 : 60,
+        temperature: 0.6,
+      });
+      reply = refined.choices?.[0]?.message?.content?.trim() || reply;
+    }
+
     aiReplyCountHour++;
-    return response.choices?.[0]?.message?.content?.trim() || "";
+    return reply;
   } catch (e) {
     console.error("[AI REPLY] Error generating reply:", (e as any).message || e);
     return "";
