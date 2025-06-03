@@ -2,8 +2,8 @@
 // GasGuardian Disruptive Recruitment Userbot
 // ➤ 5-minute “discover” (scrape + enqueue) + 30-minute “join/reply” cycle
 // ➤ Scraping now skips 403/404 immediately (no backoff retries cluttering logs).
-// ➤ TGStatBot filter now sends a t.me link instead of `/stats @username`.
-// ➤ Rest of the logic (Redis queue, AI replies, DM funnel, summaries) is unchanged.
+// ➤ TGStat API replaces the old bot-based filter.
+// ➤ Uses TGStat API to filter channels by engagement.
 // Updated: 06/05/2025 (using gpt-4o)
 
 import * as path from "path";
@@ -14,7 +14,7 @@ import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { NewMessage, NewMessageEvent } from "telegram/events";
 import OpenAI from "openai";
-import { searchTGStat } from "./tgstat-search";
+import { searchTGStat, fetchTGStatChannelInfo } from "./tgstat-search";
 import { searchTelegram } from "./telegram-search";
 import Redis from "ioredis";
 import { prisma, logChannelSearch, channelAlreadySearched } from "./db";
@@ -506,69 +506,8 @@ function pickRandomCTA(): string {
 // ----------------------------------------
 // === SCRAPING PUBLIC DIRECTORIES =======
 // ----------------------------------------
-
-
 /**
- * Use @TGStat_Bot to filter out low-engagement channels.
- * Now: we send "https://t.me/<username-without-@>" instead of `/stats @username`.
- * Returns true if channel has ≥ 500 daily views.
- */
-async function filterByTGStatBot(username: string): Promise<boolean> {
-  try {
-    const botPeer = "@TGStat_Bot";
-    // Construct a t.me link from the username (strip leading '@')
-    const raw = username.startsWith("@") ? username.slice(1) : username;
-    const channelLink = `https://t.me/${raw}`;
-
-    // Send the link to TGStatBot
-    const sentMsg = await client.sendMessage(botPeer, { message: channelLink });
-    await sleep(3000, 5000);
-
-    const entity = await client.getEntity(botPeer);
-    const updates = (await client.invoke(
-      new Api.messages.GetHistory({
-        peer:
-          entity instanceof Api.User && entity.accessHash !== undefined
-            ? new Api.InputPeerUser({ userId: entity.id, accessHash: entity.accessHash })
-            : (() => {
-                throw new Error("Entity is not a User or missing accessHash");
-              })(),
-        limit: 5,
-        offsetDate: 0,
-        offsetId: sentMsg.id,
-        maxId: 0,
-        minId: 0,
-        addOffset: 0,
-        hash: BigInt(0),
-      })
-    )) as any;
-
-    const messages: Api.Message[] = updates.messages || [];
-    for (const m of messages) {
-      const text = (m as any).message as string;
-      if (!text) continue;
-
-      // Look for "Views per day: 12,345"
-      const match = text.match(/Views per day:\s*([\d,]+)/i);
-      if (match) {
-        const views = Number(match[1].replace(/,/g, ""));
-        return views >= 500;
-      }
-      // If it says "not found" or "no data", skip this channel
-      if (/not found/i.test(text) || /no data/i.test(text)) {
-        return false;
-      }
-    }
-    return false;
-  } catch (err: any) {
-    console.error(`[TGSTAT BOT] Error filtering ${username}:`, err.message || err);
-    return false;
-  }
-}
-
-
-/**
- * Search TGStat and Telegram for recruitment keywords, then filter via TGStatBot.
+ * Search TGStat and Telegram for recruitment keywords, then filter via TGStat API.
  */
 async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
   const usernamesSet = new Set<string>();
@@ -589,8 +528,8 @@ async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
     if (finalCandidates.length >= maxCandidates) break;
     if (await channelAlreadySearched(uname)) continue;
     await logChannelSearch(uname);
-    const ok = await filterByTGStatBot(uname);
-    if (ok) finalCandidates.push(uname);
+    const info = await fetchTGStatChannelInfo(uname);
+    if (info && info.viewsPerDay >= 500) finalCandidates.push(uname);
     await sleep(1500, 3000);
   }
 
