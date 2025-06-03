@@ -19,6 +19,11 @@ import * as cheerio from "cheerio";
 import Redis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import schedule from "node-schedule";
+import {
+  RELEVANT_KEYWORDS,
+  containsRelevantKeyword,
+  pickMostRelevantMessage,
+} from "./relevance";
 
 // ----------------------------------------
 // === ENVIRONMENT & CONFIGURATION  ======
@@ -75,45 +80,6 @@ const SENSITIVE_REGEX = new RegExp(`\\b(?:${SENSITIVE_WORDS.join("|")})\\b`, "i"
 const GROUP_JOIN_WAIT_MIN = 3; // minutes to wait after joining before posting
 const DM_REMINDER_MIN = 30;    // minutes before DM follow-up
 
-/**
- * A broadened list of “trigger keywords” in English and Russian
- * to capture more valid groups.
- */
-const RELEVANT_KEYWORDS = [
-  // English
-  "gas",
-  "ethereum",
-  "eth",
-  "polygon",
-  "gas fees",
-  "defi",
-  "transaction",
-  "fee",
-  "arbitrum",
-  "optimism",
-  "l2",
-  "zksync",
-  "starknet",
-  "gas optimization",
-  "eth gas tracker",
-  "cheap gas",
-  "gas price",
-  "gas monitor",
-  "gas analyzer",
-  // Russian
-  "газ",
-  "газовые комиссии",
-  "газ эфириум",
-  "экономия газа",
-  "низкие комиссии",
-  "дефи",
-  "эфириум",
-  "газ трекер",
-  "газ прайс",
-  "дешевый газ",
-  "газ монитор",
-  "алгоритм оптимизации",
-];
 
 const config = {
   telegram: {
@@ -378,32 +344,6 @@ async function fetchRecentMessages(
  * Returns `true` if any of the given `messages` contains at least
  * one of our RELEVANT_KEYWORDS (case-insensitive).
  */
-function containsRelevantKeyword(messages: string[]): boolean {
-  const lowerMsgs = messages.map((t) => t.toLowerCase());
-  for (const msg of lowerMsgs) {
-    for (const kw of RELEVANT_KEYWORDS) {
-      if (msg.includes(kw.toLowerCase())) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Pick the single most recent “relevant” message from `messages`.
- * If none match, return null.
- */
-function pickMostRelevantMessage(messages: string[]): string | null {
-  for (const text of messages) {
-    for (const kw of RELEVANT_KEYWORDS) {
-      if (text.toLowerCase().includes(kw.toLowerCase())) {
-        return text;
-      }
-    }
-  }
-  return null;
-}
 
 /**
  * Ask OpenAI to generate a concise, context-driven reply to the given `promptText`.
