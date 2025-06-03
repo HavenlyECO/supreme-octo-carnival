@@ -106,6 +106,8 @@ const config = {
   discovery: {
     // We “discover” every 5 minutes and “join” every 30 minutes.
     minMembers: 200,
+    // Only consider channels with a message within the last X days
+    maxLastActivityDays: 7,
     maxScrapePerRun: 100, // max candidates to enqueue in each 5-minute scrape
     maxJoinPerRun: 30,    // how many to attempt in each 30-minute join slot
     blacklist: [
@@ -337,6 +339,44 @@ async function fetchRecentMessages(
       .map((m) => (m as any).message as string);
   } catch {
     return [];
+  }
+}
+
+/**
+ * Check whether a channel meets our basic activity and size requirements.
+ * Returns true only if the channel has at least `minMembers` participants and
+ * a message in the last `maxLastActivityDays` days.
+ */
+async function channelIsActiveAndLarge(username: string): Promise<boolean> {
+  const input = await getInputChannel(username);
+  if (!input) return false;
+
+  try {
+    const full = (await client.invoke(
+      new Api.channels.GetFullChannel({ channel: input })
+    )) as any;
+    const memberCount = full.fullChat?.participantsCount ?? 0;
+    if (memberCount < config.discovery.minMembers) return false;
+
+    const hist = (await client.invoke(
+      new Api.messages.GetHistory({
+        peer: input,
+        limit: 1,
+        offsetDate: 0,
+        offsetId: 0,
+        maxId: 0,
+        minId: 0,
+        addOffset: 0,
+        hash: Api.BigInteger.fromValue(0),
+      })
+    )) as any;
+    const msgs: Api.Message[] = hist.messages || [];
+    if (msgs.length === 0) return false;
+    const last = (msgs[0] as any).date as Date;
+    const daysAgo = (Date.now() - last.getTime()) / (1000 * 60 * 60 * 24);
+    return daysAgo <= config.discovery.maxLastActivityDays;
+  } catch {
+    return false;
   }
 }
 
@@ -629,7 +669,9 @@ async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
 async function scrapeAndEnqueueCandidates() {
   console.log("[DISCOVERY] Running 5-minute scrape + enqueue");
   try {
-    const scraped = await scrapePublicSources(config.discovery.maxScrapePerRun);
+    const scraped = await scrapePublicSources(
+      config.discovery.maxScrapePerRun * 2
+    );
     const added: string[] = [];
 
     for (const uname of scraped) {
@@ -643,6 +685,10 @@ async function scrapeAndEnqueueCandidates() {
         }
       }
       if (skip) continue;
+
+      // Ensure channel meets basic activity/membership requirements
+      const healthy = await channelIsActiveAndLarge(uname);
+      if (!healthy) continue;
 
       // Only enqueue if not already in Redis queue
       const queueContents = await redis?.lrange(config.discovery.candidateQueueKey, 0, -1);
