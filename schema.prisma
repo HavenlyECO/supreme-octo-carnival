@@ -20,3 +20,9 @@ model userProfile {
   tgId     BigInt @id
   address  String?
 }
+
+model channelSearch {
+  id         Int      @id @default(autoincrement())
+  username   String   @unique
+  searchedAt DateTime @default(now())
+}

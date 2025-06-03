@@ -17,7 +17,7 @@ import OpenAI from "openai";
 import { searchTGStat } from "./tgstat-search";
 import { searchTelegram } from "./telegram-search";
 import Redis from "ioredis";
-import { PrismaClient } from "@prisma/client";
+import { prisma, logChannelSearch, channelAlreadySearched } from "./db";
 import schedule from "node-schedule";
 import {
   RELEVANT_KEYWORDS,
@@ -53,7 +53,6 @@ const env = {
 
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const redis = env.REDIS_URL ? new Redis(env.REDIS_URL) : null;
-const prisma = new PrismaClient();
 
 const client = new TelegramClient(
   new StringSession(env.TG_SESSION),
@@ -588,6 +587,8 @@ async function scrapePublicSources(maxCandidates: number): Promise<string[]> {
   const finalCandidates: string[] = [];
   for (const uname of usernamesSet) {
     if (finalCandidates.length >= maxCandidates) break;
+    if (await channelAlreadySearched(uname)) continue;
+    await logChannelSearch(uname);
     const ok = await filterByTGStatBot(uname);
     if (ok) finalCandidates.push(uname);
     await sleep(1500, 3000);
@@ -677,6 +678,9 @@ async function processCandidateQueue() {
     // Fetch candidate from retry set or main queue
     const uname = await dequeueCandidate();
     if (!uname) break;
+    if (redis) {
+      await redis.sadd('processed_channels', uname);
+    }
 
     const inputChan = await getInputChannel(uname);
     if (!inputChan) {
